@@ -42,4 +42,6 @@ All IDs are the board's own IDs. Datetimes are UTC. `posts.content` and `users.s
 - For topics whose posts were scraped: `post_count`, `last_post_id` (the latest post by time) and `created_at` (the first post's time).
 - For forums, over their own topics (subforums not included): `post_count`, `view_count` and `last_post_id`.
 
+A few posts make Tapatalk's own backend fail with a MySQL collation error, for example an author name containing an emoji-range character. The API then errors for any range that includes them. The crawler narrows the range down to the bad posts, skips them, and records them as `post-gap:<topic>:<offset>` rows in `crawl_state`. `status` lists them.
+
 Users that only appear as authors but whose profiles are gone keep a row with just `id` and `name`. Rank, signature and group names need the HTML site and come in a later milestone.

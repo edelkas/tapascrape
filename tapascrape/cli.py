@@ -7,7 +7,7 @@ import sys
 from tapascrape.config import BoardConfig
 from tapascrape.crawl.finalize import finalize
 from tapascrape.crawl.forums import print_tree, store_forums, survey
-from tapascrape.crawl.posts import crawl_posts, pending_topics
+from tapascrape.crawl.posts import GAP_PREFIX, crawl_posts, pending_topics
 from tapascrape.crawl.topics import crawl_topics
 from tapascrape.crawl.users import crawl_users, pending_users
 from tapascrape.db import open_database
@@ -89,6 +89,11 @@ def print_status(db, out) -> None:
         print(f"{table.name:>12}: {count:,}", file=out)
     print(f"{'pending':>12}: {len(pending_topics(db, None)):,} topics, "
           f"{len(pending_users(db)):,} users", file=out)
+    gaps = sorted(tuple(map(int, key.split(":"))) for key in db.states(GAP_PREFIX))
+    if gaps:
+        listed = ", ".join(f"topic {t} #{o + 1}" for t, o in gaps[:10])
+        more = f" (+{len(gaps) - 10} more)" if len(gaps) > 10 else ""
+        print(f"{'unfetchable':>12}: {len(gaps):,} posts: {listed}{more}", file=out)
 
 
 def build_parser() -> argparse.ArgumentParser:

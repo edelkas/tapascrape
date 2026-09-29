@@ -8,7 +8,7 @@ from tapascrape.config import BoardConfig
 from tapascrape.crawl import users as users_module
 from tapascrape.crawl.finalize import finalize
 from tapascrape.crawl.forums import store_forums
-from tapascrape.crawl.posts import crawl_posts, pending_topics
+from tapascrape.crawl.posts import GAP_PREFIX, crawl_posts, pending_topics
 from tapascrape.crawl.topics import crawl_topics
 from tapascrape.crawl.users import crawl_users, pending_users
 from tapascrape.db import open_database
@@ -33,9 +33,10 @@ USERS = {
 
 
 class FakeApi(TapatalkApi):
-    def __init__(self, fail_topic_after=None):
+    def __init__(self, fail_topic_after=None, broken_offsets=()):
         super().__init__(BoardConfig("test", rate=0))
         self.fail_topic_after = fail_topic_after  # (topic id, start) to raise at, once
+        self.broken_offsets = set(broken_offsets)  # (topic id, offset) the server can't render
         self.calls = []
 
     def call(self, method, *params):
@@ -56,6 +57,8 @@ class FakeApi(TapatalkApi):
         if self.fail_topic_after == (int(tid), start):
             self.fail_topic_after = None
             raise ApiError("boom")
+        if any((int(tid), o) in self.broken_offsets for o in range(start, end + 1)):
+            raise ApiError("get_thread: (SQL-ERROR-CODE:1267) SQL ERROR [ mysqli ]\n\nIllegal mix")
         posts = TOPICS[int(tid)][4]
         return {"total_post_num": len(posts), "posts": [
             {"post_id": str(pid), "post_author_id": str(uid),
@@ -149,6 +152,29 @@ def test_posts_resume_after_failure(db):
     assert [c[1][:2] for c in retry.calls if c[0] == "get_thread"] == [("6364", 50)]
     assert db.query("SELECT COUNT(*) FROM posts WHERE topic_id = 6364") == [(60,)]
     assert pending_topics(db, None) == []
+
+
+def test_unrenderable_posts_are_isolated_and_skipped(db):
+    store_forums(db, forums())
+    api = FakeApi(broken_offsets={(6364, 27), (6364, 28), (24242, 0)})
+    crawl_topics(api, db, all_forums())
+    crawl_posts(api, db)
+    indexes = {r[0] for r in db.query('SELECT "index" FROM posts WHERE topic_id = 6364')}
+    assert indexes == set(range(1, 61)) - {28, 29}
+    assert db.query("SELECT id FROM posts WHERE topic_id = 24242") == [(901,)]
+    assert set(db.states(GAP_PREFIX)) == {"6364:27", "6364:28", "24242:0"}
+    assert pending_topics(db, None) == []  # gaps don't keep topics pending
+    # Bisection stays cheap: far fewer calls than one per post.
+    assert len([c for c in api.calls if c[0] == "get_thread"]) < 25
+
+
+def test_other_api_errors_are_not_bisected(db):
+    store_forums(db, forums())
+    api = FakeApi(fail_topic_after=(6364, 0))
+    crawl_topics(api, db, all_forums())
+    crawl_posts(api, db)
+    assert [c[1][1] for c in api.calls if c[0] == "get_thread" and c[1][0] == "6364"] == [0]
+    assert db.states(GAP_PREFIX) == {}
 
 
 def test_forum_filter(db):

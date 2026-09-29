@@ -164,35 +164,35 @@ class TapatalkApi:
 
     # -- posts -----------------------------------------------------------
 
-    def iter_post_pages(self, topic_id: int, start: int = 0) -> Iterator[tuple[int, list[Post]]]:
-        """Pages of a topic's posts as (next_start, posts), from offset `start`.
+    def post_range(self, topic_id: int, start: int, end: int) -> tuple[int, list[Post]]:
+        """(total post count, posts at offsets start..end inclusive) of a topic.
 
-        Note: each call bumps the topic's view count on the board.
+        At most PAGE_SIZE posts per call. Each call bumps the topic's view count.
         """
-        while True:
-            page = self.call("get_thread", str(topic_id), start, start + PAGE_SIZE - 1, True)
-            raws = page.get("posts", [])
-            posts = [
-                Post(
-                    id=int(raw["post_id"]),
-                    topic_id=topic_id,
-                    user_id=to_int(raw.get("post_author_id")),
-                    index=int(raw.get("position") or start + i + 1),
-                    timestamp=to_datetime(raw.get("timestamp")),
-                    content=raw.get("post_content", ""),
-                    author_name=raw.get("post_author_name") or None,
-                )
-                for i, raw in enumerate(raws)
-            ]
-            start += PAGE_SIZE
-            yield start, posts
-            if not raws or start >= int(page.get("total_post_num", 0)):
-                break
+        page = self.call("get_thread", str(topic_id), start, end, True)
+        posts = [
+            Post(
+                id=int(raw["post_id"]),
+                topic_id=topic_id,
+                user_id=to_int(raw.get("post_author_id")),
+                index=int(raw.get("position") or start + i + 1),
+                timestamp=to_datetime(raw.get("timestamp")),
+                content=raw.get("post_content", ""),
+                author_name=raw.get("post_author_name") or None,
+            )
+            for i, raw in enumerate(page.get("posts", []))
+        ]
+        return int(page.get("total_post_num", 0)), posts
 
     def iter_posts(self, topic_id: int) -> Iterator[Post]:
         """All posts of a topic in order."""
-        for _, posts in self.iter_post_pages(topic_id):
+        start = 0
+        while True:
+            total, posts = self.post_range(topic_id, start, start + PAGE_SIZE - 1)
             yield from posts
+            start += PAGE_SIZE
+            if not posts or start >= total:
+                break
 
     # -- users -----------------------------------------------------------
 
