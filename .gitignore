@@ -1,0 +1,6 @@
+__pycache__/
+*.egg-info/
+*.db
+*.db-journal
+cookies*.txt
+.venv/
