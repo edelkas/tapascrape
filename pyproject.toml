@@ -16,6 +16,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+# Passes Cloudflare for the HTML pass (enrich) by driving the installed Chrome.
+browser = ["zendriver>=0.15"]
 
 [project.scripts]
 tapascrape = "tapascrape.cli:main"

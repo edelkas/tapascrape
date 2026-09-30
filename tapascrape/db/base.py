@@ -151,6 +151,10 @@ class Database(ABC):
     def set_state(self, key: str, value: str) -> None:
         self.upsert_many(CRAWL_STATE.name, [{"key": key, "value": value}])
 
+    def delete_state(self, key: str) -> None:
+        self.execute(f"DELETE FROM {self.quote_ident(CRAWL_STATE.name)} "
+                     f"WHERE {self.quote_ident('key')} = ?", (key,))
+
     def states(self, prefix: str) -> dict[str, str]:
         """All crawl-state entries whose key starts with `prefix`, keyed by the rest."""
         rows = self.query(

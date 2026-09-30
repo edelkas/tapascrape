@@ -5,6 +5,7 @@ import logging
 import sys
 
 from tapascrape.config import BoardConfig
+from tapascrape.crawl.enrich import enrich_profiles, pending_profiles, recover_gaps
 from tapascrape.crawl.finalize import finalize
 from tapascrape.crawl.forums import print_tree, store_forums, survey
 from tapascrape.crawl.posts import GAP_PREFIX, crawl_posts, pending_topics
@@ -13,6 +14,7 @@ from tapascrape.crawl.users import crawl_users, pending_users
 from tapascrape.db import open_database
 from tapascrape.db.schema import TABLES
 from tapascrape.net.api import TapatalkApi
+from tapascrape.net.web import WebClient
 
 log = logging.getLogger("tapascrape")
 
@@ -68,6 +70,21 @@ def cmd_crawl(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_enrich(args: argparse.Namespace) -> int:
+    config = BoardConfig(args.board, rate=args.rate)
+    with open_database(args.db) as db, WebClient(
+            config, cookies_file=args.cookies, user_agent=args.user_agent,
+            use_browser=not args.no_browser, impersonate=args.impersonate) as web:
+        db.create_schema()
+        if not args.no_gaps:
+            recover_gaps(web, db)
+        if not args.no_profiles:
+            enrich_profiles(web, db, refresh=args.refresh)
+        finalize(db)
+        print_status(db, sys.stdout)
+    return 0
+
+
 def cmd_finalize(args: argparse.Namespace) -> int:
     with open_database(args.db) as db:
         db.create_schema()
@@ -88,7 +105,8 @@ def print_status(db, out) -> None:
         (count,), = db.query(f"SELECT COUNT(*) FROM {db.quote_ident(table.name)}")
         print(f"{table.name:>12}: {count:,}", file=out)
     print(f"{'pending':>12}: {len(pending_topics(db, None)):,} topics, "
-          f"{len(pending_users(db)):,} users", file=out)
+          f"{len(pending_users(db)):,} users, {len(pending_profiles(db)):,} HTML profiles",
+          file=out)
     gaps = sorted(tuple(map(int, key.split(":"))) for key in db.states(GAP_PREFIX))
     if gaps:
         listed = ", ".join(f"topic {t} #{o + 1}" for t, o in gaps[:10])
@@ -126,6 +144,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-users", action="store_true", help="skip fetching user profiles")
     p.add_argument("--no-avatars", action="store_true", help="skip downloading avatars")
     p.set_defaults(func=cmd_crawl)
+
+    p = board_command("enrich", "HTML pass: rank, signature, group names; recover unfetchable posts")
+    p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
+    p.add_argument("--refresh", action="store_true", help="re-fetch already enriched profiles")
+    p.add_argument("--no-profiles", action="store_true", help="skip user profiles")
+    p.add_argument("--no-gaps", action="store_true", help="skip recovering unfetchable posts")
+    p.add_argument("--cookies", metavar="FILE", help="cookies.txt (Netscape format) from your browser")
+    p.add_argument("--user-agent", help="exact User-Agent of the browser the cookies come from")
+    p.add_argument("--no-browser", action="store_true",
+                   help="never open Chrome to pass Cloudflare (needs --cookies)")
+    p.add_argument("--impersonate", default="chrome",
+                   help="curl_cffi browser fingerprint matching the cookies' browser (default chrome)")
+    p.set_defaults(func=cmd_enrich)
 
     for name, func, help in (("finalize", cmd_finalize, "recompute aggregate columns"),
                              ("status", cmd_status, "show row counts and pending work")):
