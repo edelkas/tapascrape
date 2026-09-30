@@ -6,6 +6,7 @@ positions and second-precision timestamps.
 """
 
 import http.client
+import http.cookies
 import logging
 import xmlrpc.client
 from collections.abc import Iterator
@@ -15,6 +16,7 @@ from xml.parsers.expat import ExpatError
 
 from tapascrape.config import BoardConfig
 from tapascrape.models import Forum, Post, Topic, User
+from tapascrape.net.session import Session
 from tapascrape.net.throttle import RetryableError, Throttle
 
 log = logging.getLogger(__name__)
@@ -28,16 +30,36 @@ class ApiError(Exception):
 
 
 class _Transport(xmlrpc.client.SafeTransport):
+    """XML-RPC over HTTPS with a timeout and a cookie jar (for logged-in sessions)."""
+
     user_agent = "Tapatalk"
 
-    def __init__(self, timeout: float):
+    def __init__(self, timeout: float, session: Session | None = None):
         super().__init__()
         self.timeout = timeout
+        self.cookies: dict[str, str] = {}
+        if session is not None:
+            # phpBB checks the session against the browser that created it.
+            self.user_agent = session.user_agent
+            self.cookies.update(session.cookies)
 
     def make_connection(self, host):
         conn = super().make_connection(host)
         conn.timeout = self.timeout
         return conn
+
+    def send_headers(self, connection, headers):
+        if self.cookies:
+            headers = [*headers, ("Cookie", "; ".join(f"{k}={v}" for k, v in self.cookies.items()))]
+        super().send_headers(connection, headers)
+
+    def parse_response(self, response):
+        for header in response.msg.get_all("Set-Cookie") or []:
+            jar = http.cookies.SimpleCookie()
+            jar.load(header)
+            for name, morsel in jar.items():
+                self.cookies[name] = morsel.value
+        return super().parse_response(response)
 
 
 def decode(value: Any) -> Any:
@@ -65,11 +87,12 @@ def to_int(value: Any) -> int | None:
 
 
 class TapatalkApi:
-    def __init__(self, config: BoardConfig, throttle: Throttle | None = None):
+    def __init__(self, config: BoardConfig, throttle: Throttle | None = None,
+                 session: Session | None = None):
         self.config = config
         self.throttle = throttle or Throttle(config.rate)
         self._proxy = xmlrpc.client.ServerProxy(
-            config.api_url, transport=_Transport(config.timeout), allow_none=True)
+            config.api_url, transport=_Transport(config.timeout, session), allow_none=True)
 
     # -- low level -------------------------------------------------------
 
@@ -196,8 +219,33 @@ class TapatalkApi:
 
     # -- users -----------------------------------------------------------
 
+    def logged_in(self) -> bool:
+        """Whether the API treats this client as logged in.
+
+        get_config always reports user_id 1, so probe a members-only call instead.
+        """
+        try:
+            self.call("get_inbox_stat")
+        except ApiError:
+            return False
+        return True
+
     def get_user(self, user_id: int) -> User:
-        raw = self.call("get_user_info", xmlrpc.client.Binary(b""), str(user_id))
+        return self._user(self.call("get_user_info", xmlrpc.client.Binary(b""), str(user_id)))
+
+    def member_page(self, page: int, per_page: int = PAGE_SIZE) -> tuple[int, list[User]]:
+        """(member count, users) for a 1-based page of the member list.
+
+        Available to guests, unlike the website's member list.
+        """
+        result = self.call("get_member_list", page, per_page)
+        raws = result.get("list") or []
+        if isinstance(raws, dict):
+            raws = list(raws.values())
+        return int(result.get("member_count", 0)), [self._user(raw) for raw in raws]
+
+    @staticmethod
+    def _user(raw: dict) -> User:
         return User(
             id=int(raw["user_id"]),
             name=raw.get("username") or raw.get("user_name", ""),

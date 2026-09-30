@@ -10,7 +10,7 @@ from tapascrape.crawl.finalize import finalize
 from tapascrape.crawl.forums import store_forums
 from tapascrape.crawl.posts import GAP_PREFIX, crawl_posts, pending_topics
 from tapascrape.crawl.topics import crawl_topics
-from tapascrape.crawl.users import crawl_users, pending_users
+from tapascrape.crawl.users import crawl_members, crawl_users, pending_users
 from tapascrape.db import open_database
 from tapascrape.models import Forum
 from tapascrape.net.api import ApiError, TapatalkApi
@@ -65,6 +65,15 @@ class FakeApi(TapatalkApi):
              "post_author_name": USERS.get(uid, ("Ghost",))[0], "position": i + 1,
              "timestamp": str(ts), "post_content": f"<p>{pid}</p>"}
             for i, (pid, uid, ts) in enumerate(posts) if start <= i <= end]}
+
+    def _get_member_list(self, page, per_page):
+        members = [self._get_user_info("", str(uid)) for uid in sorted(USERS)]
+        members.append({"user_id": "555", "username": "Lurker", "usergroup_id": ["2"],
+                        "post_count": 0, "timestamp_reg": "1080945342", "timestamp": "",
+                        "icon_url": ""})
+        start = (max(page, 1) - 1) * per_page
+        return {"result": True, "member_count": len(members),
+                "list": {m["user_id"]: m for m in members[start:start + per_page]}}
 
     def _get_user_info(self, _name, uid):
         if int(uid) not in USERS:
@@ -175,6 +184,24 @@ def test_other_api_errors_are_not_bisected(db):
     crawl_posts(api, db)
     assert [c[1][1] for c in api.calls if c[0] == "get_thread" and c[1][0] == "6364"] == [0]
     assert db.states(GAP_PREFIX) == {}
+
+
+def test_members_include_non_posters_and_leave_deleted_authors_to_crawl_users(db):
+    store_forums(db, forums())
+    api = FakeApi()
+    crawl_topics(api, db, all_forums())
+    crawl_posts(api, db)
+    assert crawl_members(api, db, per_page=2) == 4
+    assert db.query("SELECT name, post_count, last_active_at FROM users WHERE id = 555") == [
+        ("Lurker", 0, None)]
+    assert db.query("SELECT COUNT(*) FROM avatars") == [(1,)]
+    # Only the deleted author (42) is left for per-user fetching.
+    assert pending_users(db) == [42]
+    calls = len(api.calls)
+    crawl_users(api, db)
+    assert [c[0] for c in api.calls[calls:]] == ["get_user_info"]
+    # A second walk of the list stores nothing new.
+    assert crawl_members(api, db, per_page=2) == 0
 
 
 def test_forum_filter(db):

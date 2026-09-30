@@ -20,11 +20,13 @@ import asyncio
 import http.cookiejar
 import logging
 import time
+from pathlib import Path
 
 from curl_cffi import requests
 from curl_cffi.requests.exceptions import RequestException
 
 from tapascrape.config import BoardConfig
+from tapascrape.net.session import Session, board_user_id
 from tapascrape.net.throttle import RetryableError, Throttle
 
 log = logging.getLogger(__name__)
@@ -44,13 +46,20 @@ def is_challenge(text: str) -> bool:
 class WebClient:
     def __init__(self, config: BoardConfig, throttle: Throttle | None = None,
                  cookies_file: str | None = None, user_agent: str | None = None,
-                 use_browser: bool = True, impersonate: str = "chrome"):
+                 use_browser: bool = True, impersonate: str = "chrome",
+                 login: Session | None = None, profile_dir: Path | None = None):
+        """`login`/`profile_dir`: a saved logged-in session and its Chrome profile."""
         self.config = config
         self.throttle = throttle or Throttle(config.rate)
         self.use_browser = use_browser
+        self.profile_dir = profile_dir
         self.session = requests.Session(impersonate=impersonate, timeout=config.timeout)
         self._browser: _Browser | None = None
         self._via_browser = False  # set once curl_cffi can't get through
+        if login is not None:
+            user_agent = user_agent or login.user_agent
+            for name, value in login.cookies.items():
+                self.session.cookies.set(name, value, domain=".tapatalk.com")
         if user_agent:
             self.session.headers["User-Agent"] = user_agent
         if cookies_file:
@@ -98,7 +107,7 @@ class WebClient:
         if self._browser is None:
             log.info("Cloudflare challenge: opening Chrome "
                      "(if a checkbox appears in the window, click it)")
-            self._browser = _Browser()
+            self._browser = _Browser(self.profile_dir)
         user_agent, cookies = self._browser.clearance(self.config.base_url)
         self.session.headers["User-Agent"] = user_agent
         for name, value, domain in cookies:
@@ -116,10 +125,41 @@ class WebClient:
         self.close()
 
 
-class _Browser:
-    """A visible Chrome window driven by zendriver, used synchronously."""
+def browser_login(config: BoardConfig, profile_dir: Path, timeout: float = 600) -> Session:
+    """Open the login page in Chrome and wait for the user to log in by hand."""
+    browser = _Browser(profile_dir)
+    try:
+        browser.get(config.base_url + "ucp.php?mode=login")
+        log.info("Log in to the board in the Chrome window (any method); waiting up to %d min",
+                 timeout // 60)
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                user_agent, cookies = browser.state()
+            except Exception:  # the tab is mid-navigation
+                time.sleep(2)
+                continue
+            # Only the board's own cookies (the browser also holds ad trackers etc.).
+            flat = {name: value for name, value, domain in cookies
+                    if domain.lstrip(".").endswith("tapatalk.com")}
+            user_id = board_user_id(config.board, flat)
+            if user_id is not None:
+                return Session(user_agent=user_agent, cookies=flat, user_id=user_id)
+            if time.monotonic() > deadline:
+                raise TimeoutError("not logged in before the timeout")
+            time.sleep(2)
+    finally:
+        browser.close()
 
-    def __init__(self):
+
+class _Browser:
+    """A visible Chrome window driven by zendriver, used synchronously.
+
+    With `profile_dir`, Chrome keeps its profile (and so a login) there;
+    otherwise it starts from a throwaway profile.
+    """
+
+    def __init__(self, profile_dir: Path | None = None):
         try:
             import zendriver
         except ImportError as e:
@@ -127,8 +167,12 @@ class _Browser:
                 "zendriver is needed to pass Cloudflare automatically "
                 "(pip install zendriver), or use --cookies/--user-agent") from e
         self._loop = asyncio.new_event_loop()
+        options = {}
+        if profile_dir is not None:
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            options["user_data_dir"] = str(profile_dir)
         # Headless Chrome doesn't pass the challenge; a visible window does.
-        self._browser = self._run(zendriver.start(headless=False))
+        self._browser = self._run(zendriver.start(headless=False, **options))
         self._tab = None
 
     def _run(self, coro):
@@ -137,6 +181,10 @@ class _Browser:
     def clearance(self, url: str) -> tuple[str, list[tuple[str, str, str]]]:
         """Load `url` until it's past any challenge; return (User-Agent, cookies)."""
         self.get(url)
+        return self.state()
+
+    def state(self) -> tuple[str, list[tuple[str, str, str]]]:
+        """(User-Agent, [(name, value, domain)]) of the browser right now."""
         user_agent = self._run(self._tab.evaluate("navigator.userAgent"))
         cookies = self._run(self._browser.cookies.get_all())
         return user_agent, [(c.name, c.value, c.domain) for c in cookies]

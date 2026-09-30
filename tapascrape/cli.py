@@ -10,17 +10,50 @@ from tapascrape.crawl.finalize import finalize
 from tapascrape.crawl.forums import print_tree, store_forums, survey
 from tapascrape.crawl.posts import GAP_PREFIX, crawl_posts, pending_topics
 from tapascrape.crawl.topics import crawl_topics
-from tapascrape.crawl.users import crawl_users, pending_users
+from tapascrape.crawl.users import crawl_members, crawl_users, pending_users
 from tapascrape.db import open_database
 from tapascrape.db.schema import TABLES
 from tapascrape.net.api import TapatalkApi
-from tapascrape.net.web import WebClient
+from tapascrape.net.session import Session, session_dir
+from tapascrape.net.web import WebClient, browser_login
 
 log = logging.getLogger("tapascrape")
 
 
+def load_session(args: argparse.Namespace) -> Session | None:
+    if not args.login:
+        return None
+    session = Session.load(session_dir(args.board, args.session_dir))
+    log.info("using the saved session of %s", session.username or f"user {session.user_id}")
+    return session
+
+
+def make_api(args: argparse.Namespace, session: Session | None = None) -> TapatalkApi:
+    api = TapatalkApi(BoardConfig(args.board, rate=args.rate), session=session)
+    if session is not None and not api.logged_in():
+        log.warning("the API doesn't accept the saved session (expired?); continuing as a guest. "
+                    "Run `tapascrape login %s` to log in again", args.board)
+    return api
+
+
+def cmd_login(args: argparse.Namespace) -> int:
+    config = BoardConfig(args.board, rate=args.rate)
+    directory = session_dir(args.board, args.session_dir)
+    session = browser_login(config, directory / "chrome-profile")
+    api = TapatalkApi(config, session=session)
+    if api.logged_in():
+        session.username = api.get_user(session.user_id).name
+        print(f"Logged in as {session.username} (user {session.user_id}); the API accepts the session.")
+    else:
+        print(f"Logged in on the website as user {session.user_id}, but the API doesn't accept "
+              "the session: API calls will stay anonymous.")
+    session.save(directory)
+    print(f"Session saved in {directory} (keep it private; it holds your login cookies).")
+    return 0
+
+
 def cmd_dry_run(args: argparse.Namespace) -> int:
-    api = TapatalkApi(BoardConfig(args.board, rate=args.rate))
+    api = make_api(args, load_session(args))
     roots = api.forum_tree()
     counts = survey(api, roots, count_posts=not args.no_posts)
     total = print_tree(roots, counts, sys.stdout)
@@ -36,7 +69,7 @@ def cmd_dry_run(args: argparse.Namespace) -> int:
 
 
 def cmd_init(args: argparse.Namespace) -> int:
-    api = TapatalkApi(BoardConfig(args.board, rate=args.rate))
+    api = make_api(args)
     with open_database(args.db) as db:
         db.create_schema()
         n = store_forums(db, api.forum_tree())
@@ -45,7 +78,7 @@ def cmd_init(args: argparse.Namespace) -> int:
 
 
 def cmd_crawl(args: argparse.Namespace) -> int:
-    api = TapatalkApi(BoardConfig(args.board, rate=args.rate))
+    api = make_api(args, load_session(args))
     with open_database(args.db) as db:
         db.create_schema()
         roots = api.forum_tree()
@@ -64,7 +97,11 @@ def cmd_crawl(args: argparse.Namespace) -> int:
         if not args.no_posts:
             crawl_posts(api, db, forum_ids)
         if not args.no_users:
-            crawl_users(api, db, avatars=not args.no_avatars, refresh=args.refresh_users)
+            avatars = not args.no_avatars
+            if not args.no_members:
+                crawl_members(api, db, avatars=avatars, refresh=args.refresh_users)
+            # Authors missing from the member list (typically deleted accounts).
+            crawl_users(api, db, avatars=avatars, refresh=args.refresh_users)
         finalize(db)
         print_status(db, sys.stdout)
     return 0
@@ -72,9 +109,12 @@ def cmd_crawl(args: argparse.Namespace) -> int:
 
 def cmd_enrich(args: argparse.Namespace) -> int:
     config = BoardConfig(args.board, rate=args.rate)
+    session = load_session(args)
+    profile_dir = session_dir(args.board, args.session_dir) / "chrome-profile" if session else None
     with open_database(args.db) as db, WebClient(
             config, cookies_file=args.cookies, user_agent=args.user_agent,
-            use_browser=not args.no_browser, impersonate=args.impersonate) as web:
+            use_browser=not args.no_browser, impersonate=args.impersonate,
+            login=session, profile_dir=profile_dir) as web:
         db.create_schema()
         if not args.no_gaps:
             recover_gaps(web, db)
@@ -119,18 +159,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-v", "--verbose", action="store_true", help="debug logging")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    def board_command(name: str, help: str) -> argparse.ArgumentParser:
+    def board_command(name: str, help: str, login: bool = True) -> argparse.ArgumentParser:
         p = sub.add_parser(name, help=help)
         p.add_argument("board", help='board name, e.g. "metanetfr"')
         p.add_argument("--rate", type=float, default=1.0, help="max requests per second (default 1)")
+        p.add_argument("--session-dir", metavar="DIR",
+                       help="where `login` keeps the session (default ~/.tapascrape/<board>)")
+        if login:
+            p.add_argument("--login", action="store_true",
+                           help="use the session saved by `tapascrape login`")
         return p
+
+    p = board_command("login", "log in by hand in a Chrome window and save the session", login=False)
+    p.set_defaults(func=cmd_login)
 
     p = board_command("dry-run", "print the forum tree with topic/post counts; writes nothing")
     p.add_argument("--no-posts", action="store_true",
                    help="only count topics (much faster; skips listing every topic)")
     p.set_defaults(func=cmd_dry_run)
 
-    p = board_command("init", "create the schema and store the forum tree")
+    p = board_command("init", "create the schema and store the forum tree", login=False)
     p.add_argument("--db", required=True, help="e.g. sqlite:///metanet.db")
     p.set_defaults(func=cmd_init)
 
@@ -141,7 +189,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--refresh-topics", action="store_true", help="re-list topics of done forums")
     p.add_argument("--refresh-users", action="store_true", help="re-fetch already stored users")
     p.add_argument("--no-posts", action="store_true", help="skip fetching posts")
-    p.add_argument("--no-users", action="store_true", help="skip fetching user profiles")
+    p.add_argument("--no-users", action="store_true", help="skip fetching users")
+    p.add_argument("--no-members", action="store_true",
+                   help="only fetch users who posted, not the whole member list")
     p.add_argument("--no-avatars", action="store_true", help="skip downloading avatars")
     p.set_defaults(func=cmd_crawl)
 

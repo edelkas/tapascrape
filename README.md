@@ -16,6 +16,9 @@ tapascrape crawl metanetfr --db sqlite:///metanet.db
 tapascrape crawl metanetfr --db mysql://user:pass@localhost/metanet   # database must exist
 tapascrape crawl metanetfr --db sqlite:///test.db --forum 54          # a single forum
 
+# Optional: log in (by hand, in a Chrome window), then add --login to dry-run/crawl/enrich.
+tapascrape login metanetfr
+
 # HTML pass: rank, signature, group names; recovers posts the API can't return.
 tapascrape enrich metanetfr --db sqlite:///metanet.db
 
@@ -47,7 +50,16 @@ All IDs are the board's own IDs. Datetimes are UTC. `posts.content` and `users.s
 
 A few posts make Tapatalk's own backend fail with a MySQL collation error, for example an author name containing an emoji-range character. The API then errors for any range that includes them. The crawler narrows the range down to the bad posts, skips them, and records them as `post-gap:<topic>:<offset>` rows in `crawl_state`. `status` lists them. `enrich` recovers them from the topic's web page. Their content is then the website's HTML rendering, not the API's, and their timestamps have minute precision. Such posts are tagged `post-source:<id> = html` in `crawl_state`.
 
-Users that only appear as authors but whose profiles are gone keep a row with just `id` and `name`.
+Users come from the API's member list, which covers every registered member (including those who never posted) and doesn't need a login, unlike the website's. Authors missing from it (deleted accounts) keep a row with just `id` and `name`, taken from their posts.
+
+## Login
+
+A login is only needed for content hidden from guests, such as private forums. `tapascrape login <board>` opens the board's login page in Chrome:
+
+- Log in there with any method: Tapatalk ID, Google, or a legacy forum account. The tool never sees your password.
+- The Chrome profile and a `session.json` (cookies + User-Agent) are saved in `~/.tapascrape/<board>/`, or wherever `--session-dir` points. They hold live login cookies, so keep them private.
+- `--login` makes `dry-run`, `crawl` and `enrich` use the saved session, for both API calls and web pages.
+- If the session has expired, the API falls back to guest access with a warning. Run `login` again.
 
 ## Cloudflare
 
