@@ -9,6 +9,8 @@ from tapascrape.crawl.enrich import enrich_profiles, pending_profiles, recover_g
 from tapascrape.crawl.finalize import finalize
 from tapascrape.crawl.forums import print_tree, store_forums, survey
 from tapascrape.crawl.posts import GAP_PREFIX, crawl_posts, pending_topics
+from tapascrape.crawl.sources import GAP_PREFIX as SOURCE_GAP_PREFIX
+from tapascrape.crawl.sources import crawl_sources, pending_sources
 from tapascrape.crawl.topics import crawl_topics
 from tapascrape.crawl.users import crawl_members, crawl_users, pending_users
 from tapascrape.db import open_database
@@ -125,6 +127,20 @@ def cmd_enrich(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_sources(args: argparse.Namespace) -> int:
+    # The Quote feature is members-only, so this always uses the saved session.
+    session = Session.load(session_dir(args.board, args.session_dir))
+    api = TapatalkApi(BoardConfig(args.board, rate=args.rate), session=session)
+    if not api.logged_in():
+        log.error("the saved session is no longer valid; run `tapascrape login %s`", args.board)
+        return 2
+    with open_database(args.db) as db:
+        db.create_schema()
+        crawl_sources(api, db, args.forum, batch_size=args.batch_size)
+        print_status(db, sys.stdout)
+    return 0
+
+
 def cmd_finalize(args: argparse.Namespace) -> int:
     with open_database(args.db) as db:
         db.create_schema()
@@ -145,8 +161,11 @@ def print_status(db, out) -> None:
         (count,), = db.query(f"SELECT COUNT(*) FROM {db.quote_ident(table.name)}")
         print(f"{table.name:>12}: {count:,}", file=out)
     print(f"{'pending':>12}: {len(pending_topics(db, None)):,} topics, "
-          f"{len(pending_users(db)):,} users, {len(pending_profiles(db)):,} HTML profiles",
-          file=out)
+          f"{len(pending_users(db)):,} users, {len(pending_profiles(db)):,} HTML profiles, "
+          f"{len(pending_sources(db)):,} post sources", file=out)
+    source_gaps = len(db.states(SOURCE_GAP_PREFIX))
+    if source_gaps:
+        print(f"{'no source':>12}: {source_gaps:,} posts", file=out)
     gaps = sorted(tuple(map(int, key.split(":"))) for key in db.states(GAP_PREFIX))
     if gaps:
         listed = ", ".join(f"topic {t} #{o + 1}" for t, o in gaps[:10])
@@ -207,6 +226,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--impersonate", default="chrome",
                    help="curl_cffi browser fingerprint matching the cookies' browser (default chrome)")
     p.set_defaults(func=cmd_enrich)
+
+    p = board_command("sources", "fetch posts' original BBCode into posts.source (needs `login`)",
+                      login=False)
+    p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
+    p.add_argument("--forum", type=int, action="append", metavar="ID",
+                   help="only posts in these forums (repeatable)")
+    p.add_argument("--batch-size", type=int, default=100, help="posts per request (default 100)")
+    p.set_defaults(func=cmd_sources)
 
     for name, func, help in (("finalize", cmd_finalize, "recompute aggregate columns"),
                              ("status", cmd_status, "show row counts and pending work")):

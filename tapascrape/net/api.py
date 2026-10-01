@@ -8,6 +8,7 @@ positions and second-precision timestamps.
 import http.client
 import http.cookies
 import logging
+import re
 import xmlrpc.client
 from collections.abc import Iterator
 from datetime import datetime, timezone
@@ -25,8 +26,17 @@ PAGE_SIZE = 50  # the API caps both topic and post pages at 50 items
 TOPIC_MODES = ("TOP", "ANN", "")  # sticky, announcements, normal
 
 
+QUOTE_SEAM = "[/quote]\n[quote"
+# [quote], [quote=x] or [quote="x"] ... [/quote], plus the trailing newline.
+QUOTE_WRAPPER = re.compile(r'\[quote(?:="[^"]*"|=[^\]]*)?\](.*)\[/quote\]\n?', re.DOTALL)
+
+
 class ApiError(Exception):
     """The API answered, but refused or reported a failure."""
+
+
+class SplitError(Exception):
+    """A multi-post quote couldn't be split back into posts unambiguously."""
 
 
 class _Transport(xmlrpc.client.SafeTransport):
@@ -218,6 +228,33 @@ class TapatalkApi:
                 break
 
     # -- users -----------------------------------------------------------
+
+    def quote_posts(self, post_ids: list[int]) -> dict[int, str]:
+        """BBCode source of posts, via the "Quote" feature (needs a logged-in session).
+
+        get_quote_post returns posts as the website's Quote button would, with no
+        BBCode stripped, wrapped in [quote="author"]...[/quote] and concatenated.
+        The concatenation is split on the "[/quote]\\n[quote" seams; if a post's
+        own text contains that seam, the split is ambiguous and SplitError is
+        raised (fetch fewer posts at once).
+        """
+        if not post_ids:
+            return {}
+        result = self.call("get_quote_post", "-".join(map(str, post_ids)))
+        content = result.get("post_content", "")
+        # A single post needs no splitting (its text may contain the seam itself).
+        pieces = [content] if len(post_ids) == 1 else content.split(QUOTE_SEAM)
+        if len(pieces) != len(post_ids):
+            raise SplitError(f"{len(pieces)} pieces for {len(post_ids)} posts")
+        sources = {}
+        for i, (post_id, piece) in enumerate(zip(post_ids, pieces)):
+            wrapped = ("" if i == 0 else "[quote") + piece + \
+                ("" if i == len(pieces) - 1 else "[/quote]")
+            match = QUOTE_WRAPPER.fullmatch(wrapped)
+            if match is None:
+                raise SplitError(f"post {post_id}: unexpected quote wrapper")
+            sources[post_id] = match.group(1)
+        return sources
 
     def logged_in(self) -> bool:
         """Whether the API treats this client as logged in.

@@ -19,6 +19,9 @@ tapascrape crawl metanetfr --db sqlite:///test.db --forum 54          # a single
 # Optional: log in (by hand, in a Chrome window), then add --login to dry-run/crawl/enrich.
 tapascrape login metanetfr
 
+# Original BBCode of every post into posts.source (needs `login`; ~9 h for 460k posts).
+tapascrape sources metanetfr --db sqlite:///metanet.db
+
 # HTML pass: rank, signature, group names; recovers posts the API can't return.
 tapascrape enrich metanetfr --db sqlite:///metanet.db
 
@@ -36,7 +39,7 @@ All IDs are the board's own IDs. Datetimes are UTC. `posts.content` and `users.s
 |---|---|
 | forums | id, parent_id, name, description, last_post_id, post_count, view_count |
 | topics | id, forum_id, user_id, name, stickied, locked, created_at, post_count, view_count, last_post_id |
-| posts | id, topic_id, user_id, index, timestamp, content |
+| posts | id, topic_id, user_id, index, timestamp, content, source |
 | users | id, name, rank, joined_at, last_active_at, post_count, signature, avatar_url, avatar_id |
 | avatars | id, user_id, data |
 | groups | id, name |
@@ -51,6 +54,18 @@ All IDs are the board's own IDs. Datetimes are UTC. `posts.content` and `users.s
 A few posts make Tapatalk's own backend fail with a MySQL collation error, for example an author name containing an emoji-range character. The API then errors for any range that includes them. The crawler narrows the range down to the bad posts, skips them, and records them as `post-gap:<topic>:<offset>` rows in `crawl_state`. `status` lists them. `enrich` recovers them from the topic's web page. Their content is then the website's HTML rendering, not the API's, and their timestamps have minute precision. Such posts are tagged `post-source:<id> = html` in `crawl_state`.
 
 Users come from the API's member list, which covers every registered member (including those who never posted) and doesn't need a login, unlike the website's. Authors missing from it (deleted accounts) keep a row with just `id` and `name`, taken from their posts.
+
+## Post content vs. source
+
+`posts.content` is what `get_thread` returns: HTML with only `<b>`, `<i>`, `<u>` and `<br />`, plus `[url]`, `[img]`, `[quote]` and `[spoiler]` BBCode. Everything else (`[color]`, `[size]`, `[list]`, `[font]`, ...) is stripped by the API by design.
+
+`posts.source` is the post's original BBCode, unstripped. It's obtained through the API's Quote feature (`get_quote_post`), which only works when logged in.
+
+- Posts are quoted in batches and the result is split back into posts. A batch that can't be split cleanly, or that the server fails on, is halved until the culprits are isolated.
+- Posts with no source available are recorded as `source-gap:<id>` in `crawl_state`.
+- Reruns only fetch posts whose `source` is still NULL.
+
+On boards migrated from older platforms (Yuku, InvisionFree), sources keep some import leftovers, such as `[table]` quote blocks or malformed tags like `[color=BLUE'>]`.
 
 ## Login
 

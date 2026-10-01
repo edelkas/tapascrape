@@ -9,11 +9,13 @@ from tapascrape.crawl import users as users_module
 from tapascrape.crawl.finalize import finalize
 from tapascrape.crawl.forums import store_forums
 from tapascrape.crawl.posts import GAP_PREFIX, crawl_posts, pending_topics
+from tapascrape.crawl.sources import GAP_PREFIX as SOURCE_GAP
+from tapascrape.crawl.sources import crawl_sources, pending_sources
 from tapascrape.crawl.topics import crawl_topics
 from tapascrape.crawl.users import crawl_members, crawl_users, pending_users
 from tapascrape.db import open_database
 from tapascrape.models import Forum
-from tapascrape.net.api import ApiError, TapatalkApi
+from tapascrape.net.api import ApiError, SplitError, TapatalkApi
 
 T0 = 1231906327  # 2009-01-14 04:12:07 UTC
 
@@ -30,6 +32,12 @@ USERS = {
     9370441: ("maximo", ["2"], ""),
     # 42 is a deleted account: get_user_info fails.
 }
+
+
+def source_of(pid):
+    if pid == 901:  # quotes two people: contains the seam used to split batches
+        return '[quote="a"]x[/quote]\n[quote="b"]y[/quote]\nme too'
+    return f"[b]{pid}[/b]\n[color=red]hi[/color]"
 
 
 class FakeApi(TapatalkApi):
@@ -65,6 +73,17 @@ class FakeApi(TapatalkApi):
              "post_author_name": USERS.get(uid, ("Ghost",))[0], "position": i + 1,
              "timestamp": str(ts), "post_content": f"<p>{pid}</p>"}
             for i, (pid, uid, ts) in enumerate(posts) if start <= i <= end]}
+
+    unquotable = {5850}  # post ids that make the server's quote feature fail
+
+    def _get_quote_post(self, ids):
+        pids = [int(i) for i in ids.split("-")]
+        if self.unquotable & set(pids):
+            raise ApiError("get_quote_post: (SQL-ERROR-CODE:1267) SQL ERROR [ mysqli ]")
+        authors = {pid: uid for *_, posts in TOPICS.values() for pid, uid, _ in posts}
+        return {"post_id": ids, "post_title": "", "post_content": "".join(
+            f'[quote="{USERS.get(authors[pid], ("Ghost",))[0]}"]{source_of(pid)}[/quote]\n'
+            for pid in pids)}
 
     def _get_member_list(self, page, per_page):
         members = [self._get_user_info("", str(uid)) for uid in sorted(USERS)]
@@ -202,6 +221,34 @@ def test_members_include_non_posters_and_leave_deleted_authors_to_crawl_users(db
     assert [c[0] for c in api.calls[calls:]] == ["get_user_info"]
     # A second walk of the list stores nothing new.
     assert crawl_members(api, db, per_page=2) == 0
+
+
+def test_quote_posts_splits_batches():
+    api = FakeApi()
+    assert api.quote_posts([5811, 5812]) == {5811: source_of(5811), 5812: source_of(5812)}
+    assert api.quote_posts([901]) == {901: source_of(901)}
+    with pytest.raises(SplitError):
+        api.quote_posts([900, 901, 1000])
+
+
+def test_sources_crawl_isolates_problem_posts(db):
+    store_forums(db, forums())
+    api = FakeApi()
+    crawl_topics(api, db, all_forums())
+    crawl_posts(api, db)
+    assert len(pending_sources(db)) == 63
+    assert crawl_sources(api, db, batch_size=16) == 62
+    assert db.query("SELECT source FROM posts WHERE id = 901") == [(source_of(901),)]
+    assert db.query("SELECT source FROM posts WHERE id = 5811") == [(source_of(5811),)]
+    assert db.query("SELECT source FROM posts WHERE id = 5850") == [(None,)]
+    assert set(db.states(SOURCE_GAP)) == {"5850"}
+    assert pending_sources(db) == []  # the gap isn't retried
+    calls = len(api.calls)
+    assert crawl_sources(api, db) == 0 and len(api.calls) == calls
+    # Re-crawling posts keeps the sources.
+    db.execute("DELETE FROM crawl_state WHERE key LIKE 'topic-posts:%'")
+    crawl_posts(api, db)
+    assert db.query("SELECT source FROM posts WHERE id = 5811") == [(source_of(5811),)]
 
 
 def test_forum_filter(db):

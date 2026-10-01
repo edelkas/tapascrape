@@ -69,7 +69,8 @@ POSTS = Table("posts", (
     Column("user_id", INT),
     Column("index", INT, nullable=False),
     Column("timestamp", DATETIME),
-    Column("content", LONGTEXT),
+    Column("content", LONGTEXT),  # HTML as returned by the API (or the website, see enrich)
+    Column("source", LONGTEXT),  # original BBCode source, when available (see crawl.sources)
 ), primary_key=("id",), indexes=(
     Index("ix_posts_topic", ("topic_id", "index")),
     Index("ix_posts_user", ("user_id",)),
