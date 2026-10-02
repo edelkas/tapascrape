@@ -279,9 +279,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     sys.stdout.reconfigure(errors="replace")  # odd forum names vs. a legacy console codepage
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S", stream=sys.stderr)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
+                        datefmt="%H:%M:%S", stream=sys.stderr)
+    # -v is for our own debug output (every request made); libraries stay quiet,
+    # and zendriver's chatty startup logs are hidden either way.
+    logging.getLogger("tapascrape").setLevel(logging.DEBUG if args.verbose else logging.INFO)
+    logging.getLogger("zendriver").setLevel(logging.WARNING)
     try:
         return args.func(args)
     except KeyboardInterrupt:

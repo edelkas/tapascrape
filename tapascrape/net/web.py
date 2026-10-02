@@ -92,6 +92,7 @@ class WebClient:
 
     def _curl_get(self, url: str) -> str:
         def attempt() -> str:
+            log.debug("GET %s (curl_cffi)", url)
             try:
                 response = self.session.get(url)
             except RequestException as e:
@@ -193,6 +194,7 @@ class _Browser:
         return self._run(self._get(url))
 
     async def _get(self, url: str) -> str:
+        log.debug("GET %s (Chrome)", url)
         if self._tab is None:
             self._tab = await self._browser.get(url)
         else:

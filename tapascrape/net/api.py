@@ -90,6 +90,15 @@ def decode(value: Any) -> Any:
     return value
 
 
+def describe_params(params: tuple, limit: int = 120) -> str:
+    """Readable XML-RPC parameters for logs; long values (e.g. id lists) shortened."""
+    parts = []
+    for value in decode(list(params)):
+        text = repr(value)
+        parts.append(text if len(text) <= limit else f"{text[:limit]}...({len(text)} chars)")
+    return ", ".join(parts)
+
+
 def to_datetime(unix: Any) -> datetime | None:
     """API unix timestamp (str or int) -> naive UTC datetime."""
     if unix in (None, "", "0", 0):
@@ -115,6 +124,7 @@ class TapatalkApi:
 
     def call(self, method: str, *params: Any) -> Any:
         def attempt():
+            log.debug("POST %s %s(%s)", self.config.api_url, method, describe_params(params))
             try:
                 return getattr(self._proxy, method)(*params)
             except xmlrpc.client.ProtocolError as e:
