@@ -15,7 +15,7 @@ from tapascrape.crawl.topics import crawl_topics
 from tapascrape.crawl.users import crawl_members, crawl_users, pending_users
 from tapascrape.db import open_database
 from tapascrape.db.schema import TABLES
-from tapascrape.net.api import TapatalkApi
+from tapascrape.net.api import AuthError, TapatalkApi
 from tapascrape.net.session import Session, session_dir
 from tapascrape.net.web import WebClient, browser_login
 
@@ -38,19 +38,28 @@ def make_api(args: argparse.Namespace, session: Session | None = None) -> Tapata
     return api
 
 
-def cmd_login(args: argparse.Namespace) -> int:
+def interactive_login(args: argparse.Namespace) -> tuple[Session, bool]:
+    """Log in through the Chrome window and save the session; (session, API accepts it)."""
     config = BoardConfig(args.board, rate=args.rate)
     directory = session_dir(args.board, args.session_dir)
     session = browser_login(config, directory / "chrome-profile")
     api = TapatalkApi(config, session=session)
-    if api.logged_in():
+    accepted = api.logged_in()
+    if accepted:
         session.username = api.get_user(session.user_id).name
+    session.save(directory)
+    return session, accepted
+
+
+def cmd_login(args: argparse.Namespace) -> int:
+    session, accepted = interactive_login(args)
+    if accepted:
         print(f"Logged in as {session.username} (user {session.user_id}); the API accepts the session.")
     else:
         print(f"Logged in on the website as user {session.user_id}, but the API doesn't accept "
               "the session: API calls will stay anonymous.")
-    session.save(directory)
-    print(f"Session saved in {directory} (keep it private; it holds your login cookies).")
+    print(f"Session saved in {session_dir(args.board, args.session_dir)} "
+          "(keep it private; it holds your login cookies).")
     return 0
 
 
@@ -127,16 +136,38 @@ def cmd_enrich(args: argparse.Namespace) -> int:
     return 0
 
 
+MAX_RELOGINS = 3
+
+
 def cmd_sources(args: argparse.Namespace) -> int:
-    # The Quote feature is members-only, so this always uses the saved session.
-    session = Session.load(session_dir(args.board, args.session_dir))
-    api = TapatalkApi(BoardConfig(args.board, rate=args.rate), session=session)
-    if not api.logged_in():
-        log.error("the saved session is no longer valid; run `tapascrape login %s`", args.board)
-        return 2
+    # The Quote feature is members-only: this always needs a session, and logs in
+    # again (Chrome window) when there's none or it has expired.
+    config = BoardConfig(args.board, rate=args.rate)
+    try:
+        session = Session.load(session_dir(args.board, args.session_dir))
+    except FileNotFoundError:
+        session = None
     with open_database(args.db) as db:
         db.create_schema()
-        crawl_sources(api, db, args.forum, batch_size=args.batch_size)
+        logins = 0
+        while True:
+            if session is None or not TapatalkApi(config, session=session).logged_in():
+                if logins == MAX_RELOGINS:
+                    log.error("still not logged in after %d login attempts; giving up", logins)
+                    return 2
+                log.warning("not logged in (no session, or it expired): opening Chrome to log in")
+                session, accepted = interactive_login(args)
+                logins += 1
+                if not accepted:
+                    log.error("the API doesn't accept the website session; can't fetch sources")
+                    return 2
+            try:
+                crawl_sources(TapatalkApi(config, session=session), db, args.forum,
+                              batch_size=args.batch_size, retry_gaps=args.retry_gaps)
+                break
+            except AuthError:
+                log.warning("the session expired during the run")
+                session = None
         print_status(db, sys.stdout)
     return 0
 
@@ -233,6 +264,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--forum", type=int, action="append", metavar="ID",
                    help="only posts in these forums (repeatable)")
     p.add_argument("--batch-size", type=int, default=100, help="posts per request (default 100)")
+    p.add_argument("--retry-gaps", action="store_true",
+                   help="try again the posts previously recorded as having no source")
     p.set_defaults(func=cmd_sources)
 
     for name, func, help in (("finalize", cmd_finalize, "recompute aggregate columns"),
@@ -254,3 +287,9 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("Interrupted.", file=sys.stderr)
         return 130
+    except Exception as e:  # noqa: BLE001 - last resort: a readable message, not a trace
+        log.debug("unhandled error", exc_info=True)
+        log.error("%s: %s", type(e).__name__, e)
+        log.error("Progress so far is saved; rerun the same command to resume "
+                  "(add -v for the full traceback).")
+        return 1

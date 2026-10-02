@@ -35,6 +35,13 @@ class ApiError(Exception):
     """The API answered, but refused or reported a failure."""
 
 
+class AuthError(ApiError):
+    """The API wants a logged-in session (none given, or it expired)."""
+
+
+AUTH_MESSAGES = re.compile(r"not logged in|please log ?in|login required", re.IGNORECASE)
+
+
 class SplitError(Exception):
     """A multi-post quote couldn't be split back into posts unambiguously."""
 
@@ -123,7 +130,9 @@ class TapatalkApi:
         what = f"{method}{params}"
         result = decode(self.throttle.call(attempt, self.config.max_retries, what))
         if isinstance(result, dict) and result.get("result") is False:
-            raise ApiError(f"{method}: {result.get('result_text') or 'failed'}")
+            message = str(result.get("result_text") or "failed")
+            error = AuthError if AUTH_MESSAGES.search(message) else ApiError
+            raise error(f"{method}: {message}")
         return result
 
     # -- board -----------------------------------------------------------

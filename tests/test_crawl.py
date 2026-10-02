@@ -10,12 +10,12 @@ from tapascrape.crawl.finalize import finalize
 from tapascrape.crawl.forums import store_forums
 from tapascrape.crawl.posts import GAP_PREFIX, crawl_posts, pending_topics
 from tapascrape.crawl.sources import GAP_PREFIX as SOURCE_GAP
-from tapascrape.crawl.sources import crawl_sources, pending_sources
+from tapascrape.crawl.sources import SourcesAborted, crawl_sources, pending_sources
 from tapascrape.crawl.topics import crawl_topics
 from tapascrape.crawl.users import crawl_members, crawl_users, pending_users
 from tapascrape.db import open_database
 from tapascrape.models import Forum
-from tapascrape.net.api import ApiError, SplitError, TapatalkApi
+from tapascrape.net.api import ApiError, AuthError, SplitError, TapatalkApi
 
 T0 = 1231906327  # 2009-01-14 04:12:07 UTC
 
@@ -75,11 +75,17 @@ class FakeApi(TapatalkApi):
             for i, (pid, uid, ts) in enumerate(posts) if start <= i <= end]}
 
     unquotable = {5850}  # post ids that make the server's quote feature fail
+    refused = {5860}  # readable posts the quote feature rejects anyway
+    logged_out = False
 
     def _get_quote_post(self, ids):
         pids = [int(i) for i in ids.split("-")]
+        if self.logged_out:
+            raise AuthError("get_quote_post: You are not logged in or you do not have permission")
         if self.unquotable & set(pids):
             raise ApiError("get_quote_post: (SQL-ERROR-CODE:1267) SQL ERROR [ mysqli ]")
+        if self.refused & set(pids):
+            raise ApiError("get_quote_post: Need valid post id!")
         authors = {pid: uid for *_, posts in TOPICS.values() for pid, uid, _ in posts}
         return {"post_id": ids, "post_title": "", "post_content": "".join(
             f'[quote="{USERS.get(authors[pid], ("Ghost",))[0]}"]{source_of(pid)}[/quote]\n'
@@ -237,11 +243,11 @@ def test_sources_crawl_isolates_problem_posts(db):
     crawl_topics(api, db, all_forums())
     crawl_posts(api, db)
     assert len(pending_sources(db)) == 63
-    assert crawl_sources(api, db, batch_size=16) == 62
+    assert crawl_sources(api, db, batch_size=16) == 61
     assert db.query("SELECT source FROM posts WHERE id = 901") == [(source_of(901),)]
     assert db.query("SELECT source FROM posts WHERE id = 5811") == [(source_of(5811),)]
     assert db.query("SELECT source FROM posts WHERE id = 5850") == [(None,)]
-    assert set(db.states(SOURCE_GAP)) == {"5850"}
+    assert set(db.states(SOURCE_GAP)) == {"5850", "5860"}
     assert pending_sources(db) == []  # the gap isn't retried
     calls = len(api.calls)
     assert crawl_sources(api, db) == 0 and len(api.calls) == calls
@@ -249,6 +255,53 @@ def test_sources_crawl_isolates_problem_posts(db):
     db.execute("DELETE FROM crawl_state WHERE key LIKE 'topic-posts:%'")
     crawl_posts(api, db)
     assert db.query("SELECT source FROM posts WHERE id = 5811") == [(source_of(5811),)]
+
+
+def test_sources_expired_session_is_not_a_bad_post(db):
+    store_forums(db, forums())
+    api = FakeApi()
+    crawl_topics(api, db, all_forums())
+    crawl_posts(api, db)
+    api.logged_out = True
+    with pytest.raises(AuthError):
+        crawl_sources(api, db)
+    assert db.states(SOURCE_GAP) == {}
+    assert len(pending_sources(db)) == 63
+
+
+def test_sources_stop_when_a_whole_batch_fails(db, monkeypatch):
+    store_forums(db, forums())
+    api = FakeApi()
+    crawl_topics(api, db, all_forums())
+    crawl_posts(api, db)
+    monkeypatch.setattr(FakeApi, "refused", set(range(10000)))  # the board refuses everything
+    with pytest.raises(SourcesAborted):
+        crawl_sources(api, db, batch_size=20)
+    assert db.states(SOURCE_GAP) == {}  # nothing marked: it's not the posts' fault
+
+
+def test_sources_retry_gaps(db):
+    store_forums(db, forums())
+    api = FakeApi()
+    crawl_topics(api, db, all_forums())
+    crawl_posts(api, db)
+    crawl_sources(api, db)
+    assert set(db.states(SOURCE_GAP)) == {"5850", "5860"}
+    api.refused = set()
+    assert crawl_sources(api, db, retry_gaps=True) == 1  # 5860 now works; 5850 still fails
+    assert set(db.states(SOURCE_GAP)) == {"5850"}
+
+
+def test_cli_reports_errors_without_traceback(monkeypatch, caplog):
+    from tapascrape import cli
+
+    def boom(args):
+        raise ApiError("get_quote_post: Need valid post id!")
+
+    monkeypatch.setattr(cli, "cmd_status", boom)
+    assert cli.main(["status", "--db", ":memory:"]) == 1
+    assert "ApiError: get_quote_post: Need valid post id!" in caplog.text
+    assert "rerun the same command to resume" in caplog.text
 
 
 def test_forum_filter(db):
