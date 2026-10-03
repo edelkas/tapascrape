@@ -28,7 +28,8 @@ tapascrape recover-sources metanetfr --db sqlite:///metanet.db --login
 tapascrape scan --db sqlite:///metanet.db
 # Repair migration leftovers into posts.source_fixed (--show ID previews a post; writes nothing).
 tapascrape smilies --db sqlite:///metanet.db   # smiley images -> smilies table (Wayback / Tapatalk)
-tapascrape fix --db sqlite:///metanet.db
+tapascrape fix --db sqlite:///metanet.db       # also lists attachments in the attachments table
+tapascrape attachments --db sqlite:///metanet.db   # recover attachment files (Wayback)
 tapascrape scan --db sqlite:///metanet.db --fixed   # what's left
 
 # HTML pass: rank, signature, group names; recovers posts the API can't return.
@@ -57,6 +58,7 @@ All IDs are the board's own IDs. Datetimes are UTC. `posts.content` and `users.s
 | groups | id, name |
 | group_users | group_id, user_id |
 | smilies | id, url, name, host, uses, content_type, data, recovered_from |
+| attachments | id, kind, url, name, old_member_id, uploaded_at, old_attach_id, first_post_id, uses, content_type, size, data, recovered_from |
 | crawl_state | key, value |
 
 `finalize` computes these columns:
@@ -95,6 +97,9 @@ On boards migrated from older platforms (Yuku, InvisionFree), sources keep some 
 | table-blocks | `[table][tr][td][b]QUOTE[/b] (name @ Nov 4 2005, 07:37 PM)[/td][/tr][tr][td]x[/td][/tr][/table]` | `[quote="name" date="Nov 4 2005, 07:37 PM"]x[/quote]` |
 | | the same table with `CODE` | `[code]x[/code]` |
 | smilies | `[img]http://static.yuku.com/.../tongue.gif[/img]` | `[ts:smiley=3]` |
+| attachments | `--------------------[url=/attach/ma/post-10-1081445810.txt]Click here to view the attachment[/url]` | `[ts:attachment=7]` |
+| | `[img]http://2.forumer.com/uploads/metanet/post-1-1181593950.png[/img]` | `[ts:attachment-image=8]` |
+| | `[url=...index.php?act=Attach&type=post&id=52852]my level[/url]` | `[ts:attachment-link=9]my level[/ts:attachment-link]` |
 | old-links | `[url=http://metanet.2.forumer.com/index.php?showtopic=996&st=20]here[/url]` | `[ts:topic=996 start=20]here[/ts:topic]` |
 
 Tables and sizes are rewritten innermost first, so nested quotes come out right. Pairs that don't have the expected shape (unclosed, extra cells) are left as they are. The `date` attribute isn't standard phpBB. It keeps the date exactly as Yuku displayed it, in an unknown timezone.
@@ -103,6 +108,8 @@ The last two fixes write sentinels: tags in a reserved `ts:` namespace that the 
 
 - `[ts:smiley=ID]` is a row of the `smilies` table. `tapascrape smilies` gives every distinct smiley URL in posts and signatures a stable id: the dead hosts (Yuku, forumer, other Invision boards) and the board's own Tapatalk-hosted ones (`forum_data/.../smilies/`). It then downloads each image: Tapatalk-hosted ones from the board's website (asking for the original file, not Cloudflare's WebP conversion, and with the saved login if there is one), everything else from the Wayback Machine when it was archived. Run it before `fix`. Rerunning it only adds new URLs and looks up the images still missing. `--retry` also looks again for the ones found nowhere.
 - `[ts:topic=N start=S old_post=P]text[/ts:topic]` and `[ts:forum=N]text[/ts:forum]` replace links to the old forumer board (`metanet.2.forumer.com`): named links, `[url]` autolinks and bare URLs. Topic and forum ids survived the migration, so `N` is the current id. Post ids didn't, so `old_post` (from `findpost`/`#entry` links) only records the old one. Only ids present in the database are converted. User profiles, searches, attachments and truncated URLs are left as they are.
+
+- `[ts:attachment=ID]` (the block migrated posts end with), `[ts:attachment-image=ID]` (an embedded upload) and `[ts:attachment-link=ID]text[/ts:attachment-link]` (a link to one) are rows of the `attachments` table: files uploaded to the old forumer board. `fix` lists them before rewriting. The relative `/attach/ma/<file>` links were forumer's `http://2.forumer.com/uploads/metanet/<file>`, and the file name, `post-<member>-<unix time>.<ext>`, gives the old member id and the upload time. `act=Attach&id=N` downloads are listed by id. `tapascrape attachments` then recovers the files: forumer's domains are parked (any URL answers with the same HTML page, which is detected and not stored), so they come from the Wayback Machine. It lists each upload directory's captures with a single query, and only downloads files that were archived. Each download is checked to really be the file (images must be images, no HTML pages), and the original file name is kept when the archived response has one. Files found nowhere are recorded as `attachment-missing:<id>` and skipped on later runs unless `--retry` is given.
 
 Sentinels are never written inside `[code]` blocks, nor in a post whose source already contains `[ts:`.
 

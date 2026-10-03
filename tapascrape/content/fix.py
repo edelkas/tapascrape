@@ -15,6 +15,10 @@ later stage can resolve:
     [ts:smiley=12]                              a smiley of the `smilies` table
     [ts:topic=996 start=20 old_post=43596]text[/ts:topic]   link to a topic
     [ts:forum=39]text[/ts:forum]                link to a forum
+    [ts:attachment=7]                           an attachment block (old "Click here to
+                                                view the attachment" link)
+    [ts:attachment-image=7]                     an attachment shown as an image
+    [ts:attachment-link=7]text[/ts:attachment-link]   a link to an attachment
 
 Sentinels are never written inside [code] blocks, nor in posts whose source
 already contains "[ts:" (so they can't be confused with a post's own text).
@@ -27,6 +31,8 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from urllib.parse import parse_qsl, urlsplit
 
+from tapascrape.content.attachments import (ATTACHMENT_REF, attachment_ids, canonical,
+                                            may_reference)
 from tapascrape.content.scan import iter_signature_sources, iter_sources
 from tapascrape.content.smilies import SMILEY_IMG, normalize_url, smiley_ids
 from tapascrape.crawl.progress import Progress
@@ -43,10 +49,11 @@ class FixContext:
     smilies: dict[str, int] = field(default_factory=dict)  # normalized URL -> smiley id
     topics: set[int] | None = None  # existing topic ids; None accepts any
     forums: set[int] | None = None
+    attachments: dict[str, int] = field(default_factory=dict)  # canonical URL -> attachment id
 
 
 def load_context(db: Database) -> FixContext:
-    return FixContext(smilies=smiley_ids(db),
+    return FixContext(smilies=smiley_ids(db), attachments=attachment_ids(db),
                       topics={r[0] for r in db.query("SELECT id FROM topics")},
                       forums={r[0] for r in db.query("SELECT id FROM forums")})
 
@@ -83,7 +90,7 @@ class Holder:
 def rewrite_pairs(text: str, pair: re.Pattern, rewrite: Callable[[re.Match], str | None]) -> str:
     """Rewrite innermost-first every match of `pair` (an open tag, content without
     nested pairs, close tag); `rewrite` returns None to leave a pair as it is."""
-    holder = Holder("", "")
+    holder = Holder("\ue000", "\ue001")
     if not holder.usable(text):
         return text  # can't set pairs aside safely
 
@@ -103,7 +110,7 @@ CODE_BLOCK = re.compile(r"\[code\b[^\]]*\].*?\[/code\]", re.IGNORECASE | re.DOTA
 
 def outside_code(text: str, fix: Callable[[str], str]) -> str:
     """Apply `fix` to everything but [code] blocks, whose content is literal."""
-    holder = Holder("", "")
+    holder = Holder("\ue002", "\ue003")
     if not holder.usable(text):
         return text
     masked = CODE_BLOCK.sub(lambda m: holder.hold(m.group(0)), text)
@@ -255,13 +262,72 @@ def fix_old_links(text: str, ctx: FixContext) -> str:
 
     def links(part: str) -> str:
         part = OLD_AUTOLINK.sub(autolink, OLD_LINK.sub(link, part))
-        holder = Holder("", "")
+        holder = Holder("\ue004", "\ue005")
         if not holder.usable(part):
             return part
         masked = LINKISH_PAIR.sub(lambda m: holder.hold(m.group(0)), part)
         return holder.restore(OLD_BARE.sub(bare, masked))
 
     return outside_code(text, links)
+
+
+ATTACHMENT_BLOCK = re.compile(r"(?:-{5,}\s?)?\[url=(/attach/ma/[^\]\s]+)\]"
+                              r"Click here to view the attachment\[/url\]", re.IGNORECASE)
+_REF = ATTACHMENT_REF.pattern
+ATTACHMENT_IMAGE = re.compile(rf"\[img\]({_REF})\[/img\]", re.IGNORECASE)
+ATTACHMENT_LINK = re.compile(rf"\[url=({_REF})\](.*?)\[/url\]", re.IGNORECASE | re.DOTALL)
+ATTACHMENT_AUTOLINK = re.compile(rf"\[url\]({_REF})\[/url\]", re.IGNORECASE)
+
+
+def fix_attachments(text: str, ctx: FixContext) -> str:
+    if not ctx.attachments or not may_reference(text):
+        return text
+
+    def attachment_id(ref: str) -> int | None:
+        attachment = canonical(ref)
+        return ctx.attachments.get(attachment.url) if attachment is not None else None
+
+    def block(match: re.Match) -> str:
+        found = attachment_id(match.group(1))
+        return f"[ts:attachment={found}]" if found is not None else match.group(0)
+
+    def image(match: re.Match) -> str:
+        found = attachment_id(match.group(1))
+        return f"[ts:attachment-image={found}]" if found is not None else match.group(0)
+
+    def link(match: re.Match) -> str:
+        found = attachment_id(match.group(1))
+        return (f"[ts:attachment-link={found}]{match.group(2)}[/ts:attachment-link]"
+                if found is not None else match.group(0))
+
+    def autolink(match: re.Match) -> str:
+        found = attachment_id(match.group(1))
+        return (f"[ts:attachment-link={found}]{match.group(1)}[/ts:attachment-link]"
+                if found is not None else match.group(0))
+
+    def bare(match: re.Match) -> str:
+        url = match.group(0)
+        trimmed = url.rstrip(TRAILING_PUNCTUATION)
+        found = attachment_id(trimmed)
+        return (f"[ts:attachment-link={found}]{trimmed}[/ts:attachment-link]{url[len(trimmed):]}"
+                if found is not None else url)
+
+    def attachments(part: str) -> str:
+        part = ATTACHMENT_BLOCK.sub(block, part)
+        part = ATTACHMENT_IMAGE.sub(image, part)
+        part = ATTACHMENT_AUTOLINK.sub(autolink, ATTACHMENT_LINK.sub(link, part))
+        holder = Holder("\ue006", "\ue007")
+        if not holder.usable(part):
+            return part
+        masked = ATTACHMENT_PAIR.sub(lambda m: holder.hold(m.group(0)), part)
+        return holder.restore(ATTACHMENT_REF.sub(bare, masked))
+
+    return outside_code(text, attachments)
+
+
+# Pairs whose content must not be touched when looking for bare attachment URLs.
+ATTACHMENT_PAIR = re.compile(r"\[(url|img|ts:attachment-link)\b[^\]]*\].*?\[/\1\]",
+                             re.IGNORECASE | re.DOTALL)
 
 
 FIXES = [
@@ -272,6 +338,8 @@ FIXES = [
     Fix("table-blocks", "quote/code tables -> [quote=\"author\" date=\"...\"] / [code]",
         fix_table_blocks),
     Fix("smilies", "[img]<dead smiley host>[/img] -> [ts:smiley=ID]", fix_smilies, sentinel=True),
+    Fix("attachments", "forumer uploads/attachments -> [ts:attachment=ID] (and -image, -link)",
+        fix_attachments, sentinel=True),
     Fix("old-links", "old forumer topic/forum links -> [ts:topic=N]...[/ts:topic]",
         fix_old_links, sentinel=True),
 ]

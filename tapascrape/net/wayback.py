@@ -4,8 +4,9 @@ import json
 import logging
 import urllib.parse
 from dataclasses import dataclass
+from email.message import Message
 
-from tapascrape.net.http import fetch_bytes
+from tapascrape.net.http import fetch, fetch_bytes
 from tapascrape.net.throttle import Throttle
 
 log = logging.getLogger(__name__)
@@ -64,3 +65,46 @@ def fetch_archived_image(url: str, throttle: Throttle) -> ArchivedFile | None:
             return ArchivedFile(data, mime, archived)
         log.debug("%s: capture %s is not an image", url, timestamp)
     return None
+
+
+@dataclass
+class Capture:
+    original: str   # the URL as archived
+    timestamp: str
+    mimetype: str
+
+
+def prefix_captures(prefix: str, throttle: Throttle, page_size: int = 50000) -> list[Capture]:
+    """Every capture archived with HTTP 200 of the URLs starting with `prefix`.
+
+    One query lists a whole directory, instead of a lookup per file.
+    """
+    captures: list[Capture] = []
+    resume = None
+    while True:
+        params = [("url", prefix.split("://", 1)[-1]), ("matchType", "prefix"), ("output", "json"),
+                  ("fl", "original,timestamp,mimetype"), ("filter", "statuscode:200"),
+                  ("limit", str(page_size)), ("showResumeKey", "true")]
+        if resume:
+            params.append(("resumeKey", resume))
+        body = fetch_bytes(f"{CDX_URL}?{urllib.parse.urlencode(params)}", throttle, timeout=300,
+                           max_retries=MAX_RETRIES)
+        rows = json.loads(body) if body and body.strip() else []
+        resume = None
+        if len(rows) >= 2 and len(rows[-1]) == 1:  # [..., [], [resume key]]
+            resume = rows[-1][0]
+            rows = rows[:-2]
+        captures += [Capture(*row) for row in rows[1:] if len(row) == 3]
+        if not resume:
+            return captures
+
+
+def fetch_capture(capture: Capture, throttle: Throttle) -> tuple[bytes, Message, str] | None:
+    """(data, headers, archived URL) of a capture, as it was archived (no Wayback toolbar).
+
+    Headers of the original response come prefixed with "x-archive-orig-".
+    """
+    archived = (f"https://web.archive.org/web/{capture.timestamp}id_/"
+                f"{urllib.parse.quote(capture.original, safe=URL_SAFE)}")
+    found = fetch(archived, throttle, timeout=120, max_retries=MAX_RETRIES)
+    return (found[0], found[1], archived) if found is not None else None

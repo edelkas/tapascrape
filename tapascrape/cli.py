@@ -6,6 +6,7 @@ import logging
 import sys
 
 from tapascrape.config import BoardConfig
+from tapascrape.content.attachments import collect_attachments, recover_attachments
 from tapascrape.content.fix import (FIXES, FIXES_BY_NAME, fix_posts, fix_signatures, fix_source,
                                    load_context)
 from tapascrape.content.scan import RULES_BY_NAME, matching_posts, print_report, scan
@@ -219,6 +220,8 @@ def cmd_fix(args: argparse.Namespace) -> int:
                 if applied:
                     print(f"----- source\n{rows[0][0]}\n----- fixed\n{fixed}")
             return 0
+        if any(fix.name == "attachments" for fix in fixes):
+            collect_attachments(db)  # sentinels refer to rows of the attachments table
         changed = fix_posts(db, fixes)
         signatures = fix_signatures(db, fixes)
         for fix in fixes:
@@ -254,6 +257,20 @@ def cmd_smilies(args: argparse.Namespace) -> int:
                         "FROM smilies GROUP BY host ORDER BY host")
         for host, count, uses, recovered in rows:
             print(f"{host:>8}: {count:,} smileys ({uses:,} uses), {recovered:,} with an image")
+    return 0
+
+
+def cmd_attachments(args: argparse.Namespace) -> int:
+    with open_database(args.db) as db:
+        db.create_schema()
+        collect_attachments(db)
+        if not args.no_fetch:
+            recover_attachments(db, Throttle(args.rate), retry=args.retry)
+        rows = db.query("SELECT kind, COUNT(*), SUM(uses), "
+                        "SUM(CASE WHEN data IS NULL THEN 0 ELSE 1 END) "
+                        "FROM attachments GROUP BY kind ORDER BY kind")
+        for kind, count, uses, recovered in rows:
+            print(f"{kind:>10}: {count:,} attachments ({uses:,} references), {recovered:,} recovered")
     return 0
 
 
@@ -406,6 +423,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--retry", action="store_true",
                    help="look again for smileys previously found not to be archived")
     p.set_defaults(func=cmd_smilies)
+
+    p = sub.add_parser("attachments", help="list files uploaded to the old forumer board in the "
+                                           "attachments table and recover them (Wayback Machine)")
+    p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
+    p.add_argument("--rate", type=float, default=0.2,
+                   help="max requests per second to web.archive.org (default 0.2)")
+    p.add_argument("--no-fetch", action="store_true", help="only list them; download nothing")
+    p.add_argument("--retry", action="store_true",
+                   help="look again for attachments previously found nowhere")
+    p.set_defaults(func=cmd_attachments)
 
     p = sub.add_parser("avatars", help="re-download stored avatars as originals (not Cloudflare's "
                                        "recompressed copies)")

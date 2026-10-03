@@ -1,6 +1,7 @@
 """Backend-neutral table definitions. Adapters render them to DDL.
 
-IDs are the board's own IDs (no auto-increment), except avatars.id and smilies.id.
+IDs are the board's own IDs (no auto-increment), except those of avatars, smilies and
+attachments.
 """
 
 from dataclasses import dataclass
@@ -120,11 +121,31 @@ SMILIES = Table("smilies", (
     Column("recovered_from", TEXT),       # where `data` came from (e.g. a Wayback capture)
 ), primary_key=("id",))
 
+# Files uploaded to the old forumer (Invision) board, which posts link or embed.
+# Ids are ours (stable once given); fixed sources refer to them with
+# [ts:attachment=ID], [ts:attachment-image=ID], [ts:attachment-link=ID]...
+ATTACHMENTS = Table("attachments", (
+    Column("id", INT, nullable=False),
+    Column("kind", TEXT, nullable=False),  # "upload" (a file name) or "attach-id" (act=Attach&id=N)
+    Column("url", TEXT, nullable=False),   # canonical original URL
+    Column("name", TEXT),                  # file name, e.g. "post-10-1081445810.txt"
+    Column("old_member_id", INT),          # forumer member id, from post-<member>-<time>.<ext>
+    Column("uploaded_at", DATETIME),       # from the same name (unix time)
+    Column("old_attach_id", INT),          # forumer attachment id, for "attach-id"
+    Column("first_post_id", INT),          # first post referencing it (NULL: only signatures)
+    Column("uses", INT),                   # references in posts and signatures
+    Column("content_type", TEXT),
+    Column("size", INT),
+    Column("data", BLOB),                  # NULL until recovered
+    Column("recovered_from", TEXT),        # where `data` came from (e.g. a Wayback capture)
+), primary_key=("id",))
+
 # Bookkeeping for resumable crawls (e.g. "topic:6364" -> "done").
 CRAWL_STATE = Table("crawl_state", (
     Column("key", TEXT, nullable=False),
     Column("value", TEXT),
 ), primary_key=("key",))
 
-TABLES = (FORUMS, TOPICS, POSTS, USERS, AVATARS, GROUPS, GROUP_USERS, SMILIES, CRAWL_STATE)
+TABLES = (FORUMS, TOPICS, POSTS, USERS, AVATARS, GROUPS, GROUP_USERS, SMILIES, ATTACHMENTS,
+          CRAWL_STATE)
 TABLES_BY_NAME = {t.name: t for t in TABLES}

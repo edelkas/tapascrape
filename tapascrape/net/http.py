@@ -5,6 +5,7 @@ import logging
 import urllib.error
 import urllib.request
 import uuid
+from email.message import Message
 
 from tapascrape.net.throttle import RetryableError, Throttle
 
@@ -40,7 +41,14 @@ def fetch_bytes(url: str, throttle: Throttle, timeout: float = 30.0,
     `original`: for images behind Cloudflare: bypass its cache and refuse a
     polished answer, so the file is stored as it was uploaded.
     """
-    def attempt() -> bytes | None:
+    found = fetch(url, throttle, timeout, max_retries, original)
+    return found[0] if found is not None else None
+
+
+def fetch(url: str, throttle: Throttle, timeout: float = 30.0, max_retries: int = 3,
+          original: bool = False) -> tuple[bytes, Message] | None:
+    """Like fetch_bytes, with the response headers."""
+    def attempt() -> tuple[bytes, Message] | None:
         target = cache_busted(url) if original else url
         log.debug("GET %s", target)
         headers = {"User-Agent": USER_AGENT}
@@ -52,7 +60,7 @@ def fetch_bytes(url: str, throttle: Throttle, timeout: float = 30.0,
                 if original and response.headers.get("cf-polished"):
                     raise RetryableError(f"got Cloudflare's polished copy "
                                          f"({response.headers['cf-polished']})")
-                return response.read()
+                return response.read(), response.headers
         except urllib.error.HTTPError as e:
             if e.code == 429 or e.code >= 500:
                 raise RetryableError(f"HTTP {e.code}", retry_after(e.headers.get("Retry-After"))) from e
