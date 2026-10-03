@@ -13,6 +13,14 @@ USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
 
 
+def retry_after(value: str | None) -> float | None:
+    """Seconds from a Retry-After header (the HTTP-date form is ignored)."""
+    try:
+        return float(value) if value is not None else None
+    except ValueError:
+        return None
+
+
 def fetch_bytes(url: str, throttle: Throttle, timeout: float = 30.0,
                 max_retries: int = 3) -> bytes | None:
     """GET `url`; None if it doesn't exist (4xx)."""
@@ -24,7 +32,7 @@ def fetch_bytes(url: str, throttle: Throttle, timeout: float = 30.0,
                 return response.read()
         except urllib.error.HTTPError as e:
             if e.code == 429 or e.code >= 500:
-                raise RetryableError(f"HTTP {e.code}") from e
+                raise RetryableError(f"HTTP {e.code}", retry_after(e.headers.get("Retry-After"))) from e
             return None
         except (OSError, http.client.HTTPException) as e:
             raise RetryableError(repr(e)) from e

@@ -1,6 +1,6 @@
 """Backend-neutral table definitions. Adapters render them to DDL.
 
-IDs are the board's own IDs (no auto-increment), except avatars.id.
+IDs are the board's own IDs (no auto-increment), except avatars.id and smilies.id.
 """
 
 from dataclasses import dataclass
@@ -71,6 +71,7 @@ POSTS = Table("posts", (
     Column("timestamp", DATETIME),
     Column("content", LONGTEXT),  # HTML as returned by the API (or the website, see enrich)
     Column("source", LONGTEXT),  # original BBCode source, when available (see crawl.sources)
+    Column("source_fixed", LONGTEXT),  # source with migration leftovers repaired (content.fix)
 ), primary_key=("id",), indexes=(
     Index("ix_posts_topic", ("topic_id", "index")),
     Index("ix_posts_user", ("user_id",)),
@@ -84,6 +85,8 @@ USERS = Table("users", (
     Column("last_active_at", DATETIME),
     Column("post_count", INT),
     Column("signature", LONGTEXT),
+    Column("signature_source", LONGTEXT),  # BBCode rebuilt from the signature HTML (content.fix)
+    Column("signature_fixed", LONGTEXT),   # signature_source with the post fixes applied
     Column("avatar_url", TEXT),
     Column("avatar_id", INT),
 ), primary_key=("id",))
@@ -104,11 +107,24 @@ GROUP_USERS = Table("group_users", (
     Column("user_id", INT, nullable=False),
 ), primary_key=("group_id", "user_id"), indexes=(Index("ix_group_users_user", ("user_id",)),))
 
+# Smileys that posts embedded as images from long-dead hosts (Yuku, forumer).
+# Ids are ours (stable once given); fixed sources refer to them as [ts:smiley=ID].
+SMILIES = Table("smilies", (
+    Column("id", INT, nullable=False),
+    Column("url", TEXT, nullable=False),  # as posts used it, normalized (see content.smilies)
+    Column("name", TEXT),                 # file name without extension, e.g. "tongue"
+    Column("host", TEXT),                 # "yuku", "forumer" or "other"
+    Column("uses", INT),                  # occurrences in post sources
+    Column("content_type", TEXT),
+    Column("data", BLOB),                 # NULL until recovered
+    Column("recovered_from", TEXT),       # where `data` came from (e.g. a Wayback capture)
+), primary_key=("id",))
+
 # Bookkeeping for resumable crawls (e.g. "topic:6364" -> "done").
 CRAWL_STATE = Table("crawl_state", (
     Column("key", TEXT, nullable=False),
     Column("value", TEXT),
 ), primary_key=("key",))
 
-TABLES = (FORUMS, TOPICS, POSTS, USERS, AVATARS, GROUPS, GROUP_USERS, CRAWL_STATE)
+TABLES = (FORUMS, TOPICS, POSTS, USERS, AVATARS, GROUPS, GROUP_USERS, SMILIES, CRAWL_STATE)
 TABLES_BY_NAME = {t.name: t for t in TABLES}

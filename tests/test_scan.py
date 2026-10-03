@@ -52,4 +52,4 @@ def test_scan_database(db):
     assert list(matching_posts(db, "table-quote")) == [2]
     out = io.StringIO()
     print_report(report, out)
-    assert "Scanned 2 post sources." in out.getvalue()
+    assert "Scanned 2 posts." in out.getvalue()

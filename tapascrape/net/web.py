@@ -20,6 +20,7 @@ import asyncio
 import http.cookiejar
 import logging
 import time
+import uuid
 from pathlib import Path
 
 from curl_cffi import requests
@@ -89,6 +90,46 @@ class WebClient:
             log.info("curl_cffi is still challenged; fetching pages through Chrome from now on")
             self._via_browser = True
         return self.throttle.call(lambda: self._browser.get(url), self.config.max_retries, f"GET {url}")
+
+    def get_bytes(self, url: str, accept: str = "*/*", original: bool = False) -> bytes | None:
+        """A file (e.g. an image) behind the challenge; None if it doesn't exist (4xx).
+
+        Files can't be read back from the Chrome window, so this needs curl_cffi to
+        get through (with the browser's cookies when challenged).
+
+        `original`: Cloudflare's cache serves images "polished" (recompressed, and
+        lossy: animated GIFs lose frames). A unique query string makes it a cache
+        miss, which is answered with the file itself; a polished answer is refused.
+        """
+        if original:
+            url += ("&" if "?" in url else "?") + f"nocache={uuid.uuid4().hex}"
+
+        def attempt() -> requests.Response:
+            log.debug("GET %s (curl_cffi, file)", url)
+            try:
+                response = self.session.get(url, headers={"Accept": accept})
+            except RequestException as e:
+                raise RetryableError(repr(e)) from e
+            if response.status_code == 429 or response.status_code >= 500:
+                raise RetryableError(f"HTTP {response.status_code}")
+            return response
+
+        def challenged(response: requests.Response) -> bool:
+            return ("html" in response.headers.get("content-type", "")
+                    and is_challenge(response.text[:20000]))
+
+        response = self.throttle.call(attempt, self.config.max_retries, f"GET {url}")
+        if challenged(response) and self.use_browser:
+            self._borrow_browser_cookies()
+            response = self.throttle.call(attempt, self.config.max_retries, f"GET {url}")
+        if challenged(response):
+            raise CloudflareError(f"Cloudflare challenge for {url}")
+        if response.status_code != 200:
+            return None
+        if original and response.headers.get("cf-polished"):
+            raise RetryableError(f"{url}: got Cloudflare's polished copy, not the original "
+                                 f"({response.headers['cf-polished']})")
+        return response.content
 
     def _curl_get(self, url: str) -> str:
         def attempt() -> str:

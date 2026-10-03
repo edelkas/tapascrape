@@ -9,11 +9,13 @@ back most sources. What the HTML can't tell is approximated:
   and [url='x'] (Yuku's quoted form) comes back as [url=x];
 - quotes become [quote="author"] whatever form the author's name had;
 - spoiler titles aren't rendered, so spoilers come back untitled;
+- images Tapatalk serves through its imageproxy.php get their original URL back;
 - the renderer drops the line break right before a block (quote, list,
   table...) that follows a rendered line break; it's restored.
 """
 
 import re
+from urllib.parse import unquote
 
 from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 
@@ -32,6 +34,14 @@ def style_of(tag: Tag) -> dict[str, str]:
         if value.strip():
             style[name.strip().lower()] = value.strip()
     return style
+
+
+def unproxy(url: str) -> str:
+    """The original URL of an image Tapatalk serves through imageproxy.php?url=..."""
+    path, sep, query = url.partition("imageproxy.php?url=")
+    if sep and (not path or path.endswith("/")):
+        return unquote(query)
+    return url
 
 
 def is_shortened(text: str, url: str) -> bool:
@@ -112,7 +122,7 @@ def _element(el: Tag, out: _Writer) -> None:
         if "smilies" in classes and el.get("alt"):
             out.text(el["alt"])
         elif src := el.get("data-src") or el.get("src"):
-            out.tag(f"[img]{src}[/img]")
+            out.tag(f"[img]{unproxy(src)}[/img]")
     elif name == "hr":
         out.tag("[hr]")
     elif name == "dl" and "spoiler" in classes:

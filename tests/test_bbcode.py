@@ -33,6 +33,11 @@ CODEBOX = ('<div class="codebox"><p class="codebox-header"><span class="codebox-
      "1. [url=http://numa.notdot.net]NUMA[/url]"),
     ('<img class="lazyload postimage" data-src="http://static.yuku.com/domain/bypass/images/tongue.gif"/>',
      "[img]http://static.yuku.com/domain/bypass/images/tongue.gif[/img]"),
+    # images through Tapatalk's proxy get their original URL back
+    ("<img class=\"postimage\" src=\"imageproxy.php?url='http://img.photobucket.com/a/N%20b.gif'\"/>",
+     "[img]'http://img.photobucket.com/a/N b.gif'[/img]"),
+    ('<img alt=":angry:" class="emoji smilies" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji/1f620.svg"/>',
+     ":angry:"),
     # quotes, cited or not
     ('<blockquote class="uncited"><div>Whatever</div></blockquote>', "[quote]Whatever[/quote]"),
     ("<blockquote><div><cite>sweep, Oct 4 2005, 03:57 PM wrote:</cite>Whatever</div></blockquote>",

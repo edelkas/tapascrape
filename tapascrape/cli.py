@@ -1,11 +1,16 @@
 """Command-line entry point."""
 
 import argparse
+import contextlib
 import logging
 import sys
 
 from tapascrape.config import BoardConfig
+from tapascrape.content.fix import (FIXES, FIXES_BY_NAME, fix_posts, fix_signatures, fix_source,
+                                   load_context)
 from tapascrape.content.scan import RULES_BY_NAME, matching_posts, print_report, scan
+from tapascrape.content.smilies import (collect_smilies, pending_smilies, recover_smilies,
+                                        tapatalk_board, tapatalk_fetcher)
 from tapascrape.crawl.enrich import enrich_profiles, pending_profiles, recover_gaps
 from tapascrape.crawl.finalize import finalize
 from tapascrape.crawl.forums import print_tree, store_forums, survey
@@ -19,6 +24,7 @@ from tapascrape.db import open_database
 from tapascrape.db.schema import TABLES
 from tapascrape.net.api import AuthError, TapatalkApi
 from tapascrape.net.session import Session, session_dir
+from tapascrape.net.throttle import Throttle
 from tapascrape.net.web import WebClient, browser_login
 
 log = logging.getLogger("tapascrape")
@@ -187,11 +193,67 @@ def cmd_recover_sources(args: argparse.Namespace) -> int:
 def cmd_scan(args: argparse.Namespace) -> int:
     with open_database(args.db) as db:
         db.create_schema()
+        column = "source_fixed" if args.fixed else "source"
         if args.rule:
-            for post_id in matching_posts(db, args.rule):
+            for post_id in matching_posts(db, args.rule, column):
                 print(post_id)
             return 0
-        print_report(scan(db, examples=args.examples), sys.stdout, unknown=args.unknown)
+        print_report(scan(db, examples=args.examples, column=column), sys.stdout,
+                     unknown=args.unknown)
+    return 0
+
+
+def cmd_fix(args: argparse.Namespace) -> int:
+    fixes = [FIXES_BY_NAME[name] for name in args.only] if args.only else FIXES
+    with open_database(args.db) as db:
+        db.create_schema()
+        if args.show:
+            ctx = load_context(db)
+            for post_id in args.show:
+                rows = db.query("SELECT source FROM posts WHERE id = ?", (post_id,))
+                if not rows or rows[0][0] is None:
+                    print(f"post {post_id}: no source")
+                    continue
+                fixed, applied = fix_source(rows[0][0], fixes, ctx)
+                print(f"===== post {post_id}: {', '.join(applied) or 'nothing to fix'}")
+                if applied:
+                    print(f"----- source\n{rows[0][0]}\n----- fixed\n{fixed}")
+            return 0
+        changed = fix_posts(db, fixes)
+        signatures = fix_signatures(db, fixes)
+        for fix in fixes:
+            print(f"{fix.name:>16}: {changed[fix.name]:,} posts, {signatures[fix.name]:,} signatures"
+                  f"  ({fix.description})")
+        print(f"{'total':>16}: {changed['(any)']:,} posts, {signatures['(any)']:,} signatures changed")
+    return 0
+
+
+def cmd_smilies(args: argparse.Namespace) -> int:
+    with open_database(args.db) as db:
+        db.create_schema()
+        collect_smilies(db)
+        if not args.no_fetch:
+            with contextlib.ExitStack() as stack:
+                live = None
+                # Smileys Tapatalk still hosts are behind the board's Cloudflare challenge.
+                boards = {tapatalk_board(url) for _, url, host in pending_smilies(db, args.retry)
+                          if host == "tapatalk"}
+                if boards - {None}:
+                    board = sorted(boards - {None})[0]
+                    try:
+                        session = Session.load(session_dir(board, args.session_dir))
+                    except FileNotFoundError:
+                        session = None
+                    profile = session_dir(board, args.session_dir) / "chrome-profile" if session else None
+                    web = stack.enter_context(WebClient(BoardConfig(board, rate=1.0), login=session,
+                                                        profile_dir=profile))
+                    live = tapatalk_fetcher(web)
+                recover_smilies(db, Throttle(args.rate), retry=args.retry, live=live)
+        rows = db.query("SELECT host, COUNT(*), SUM(uses), "
+                        "SUM(CASE WHEN data IS NULL THEN 0 ELSE 1 END) "
+                        "FROM smilies GROUP BY host ORDER BY host")
+        for host, count, uses, recovered in rows:
+            print(f"{host:>8}: {count:,} smileys ({uses:,} uses), {recovered:,} with an image")
     return 0
 
 
@@ -312,7 +374,31 @@ def build_parser() -> argparse.ArgumentParser:
                    help="how many non-tag bracketed words to list (default 30)")
     p.add_argument("--rule", choices=sorted(RULES_BY_NAME),
                    help="instead of the report, print the ids of every post matching this rule")
+    p.add_argument("--fixed", action="store_true",
+                   help="scan posts.source_fixed (what `fix` produced) instead of posts.source")
     p.set_defaults(func=cmd_scan)
+
+    p = sub.add_parser("fix", help="repair migration leftovers: posts.source -> posts.source_fixed "
+                                   "(source itself is never changed)")
+    p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
+    p.add_argument("--only", action="append", choices=list(FIXES_BY_NAME), metavar="FIX",
+                   help=f"apply only this fix (repeatable): {', '.join(FIXES_BY_NAME)}")
+    p.add_argument("--show", type=int, action="append", metavar="POST_ID",
+                   help="print a post's source before and after fixing; writes nothing")
+    p.set_defaults(func=cmd_fix)
+
+    p = sub.add_parser("smilies", help="list smiley images used in posts and signatures in the "
+                                       "smilies table and download them (Wayback Machine, or "
+                                       "Tapatalk for the ones it hosts); run before fix")
+    p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
+    p.add_argument("--session-dir", metavar="DIR",
+                   help="where `login` keeps the session (default ~/.tapascrape/<board>)")
+    p.add_argument("--rate", type=float, default=0.2,
+                   help="max requests per second to web.archive.org (default 0.2)")
+    p.add_argument("--no-fetch", action="store_true", help="only list them; download nothing")
+    p.add_argument("--retry", action="store_true",
+                   help="look again for smileys previously found not to be archived")
+    p.set_defaults(func=cmd_smilies)
 
     for name, func, help in (("finalize", cmd_finalize, "recompute aggregate columns"),
                              ("status", cmd_status, "show row counts and pending work")):

@@ -13,7 +13,14 @@ T = TypeVar("T")
 
 
 class RetryableError(Exception):
-    """A failure worth retrying (network error, 429, 5xx...)."""
+    """A failure worth retrying (network error, 429, 5xx...).
+
+    `retry_after`: seconds the server asked to wait (Retry-After), if any.
+    """
+
+    def __init__(self, message: str, retry_after: float | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 class Throttle:
@@ -43,6 +50,8 @@ class Throttle:
                 if attempt == max_retries:
                     raise
                 delay = min(300.0, 2.0 ** (attempt + 1)) + random.uniform(0, 1)
+                if e.retry_after is not None:
+                    delay = max(delay, min(e.retry_after, 600.0))
                 log.warning("%s failed (%s); retry %d/%d in %.0fs",
                             what, e, attempt + 1, max_retries, delay)
                 time.sleep(delay)

@@ -26,6 +26,10 @@ tapascrape recover-sources metanetfr --db sqlite:///metanet.db --login
 
 # Report markup problems in the sources (writes nothing); --rule NAME lists matching post ids.
 tapascrape scan --db sqlite:///metanet.db
+# Repair migration leftovers into posts.source_fixed (--show ID previews a post; writes nothing).
+tapascrape smilies --db sqlite:///metanet.db   # smiley images -> smilies table (Wayback / Tapatalk)
+tapascrape fix --db sqlite:///metanet.db
+tapascrape scan --db sqlite:///metanet.db --fixed   # what's left
 
 # HTML pass: rank, signature, group names; recovers posts the API can't return.
 tapascrape enrich metanetfr --db sqlite:///metanet.db
@@ -44,11 +48,12 @@ All IDs are the board's own IDs. Datetimes are UTC. `posts.content` and `users.s
 |---|---|
 | forums | id, parent_id, name, description, last_post_id, post_count, view_count |
 | topics | id, forum_id, user_id, name, stickied, locked, created_at, post_count, view_count, last_post_id |
-| posts | id, topic_id, user_id, index, timestamp, content, source |
-| users | id, name, rank, joined_at, last_active_at, post_count, signature, avatar_url, avatar_id |
+| posts | id, topic_id, user_id, index, timestamp, content, source, source_fixed |
+| users | id, name, rank, joined_at, last_active_at, post_count, signature, signature_source, signature_fixed, avatar_url, avatar_id |
 | avatars | id, user_id, data |
 | groups | id, name |
 | group_users | group_id, user_id |
+| smilies | id, url, name, host, uses, content_type, data, recovered_from |
 | crawl_state | key, value |
 
 `finalize` computes these columns:
@@ -73,6 +78,30 @@ Users come from the API's member list, which covers every registered member (inc
 `recover-sources` fills in those gaps from the topic's web page by turning the rendered HTML back into BBCode. Posts that already have a source are never touched. The board renders malformed tags as literal text, so they survive the round trip. Some details can't be recovered from the HTML: links lose the quotes around their URL, tags come back in lowercase, and spoiler titles are lost. On posts whose real source is known, about 80% come back identical. Rebuilt posts are tagged `source-origin:<id> = html` in `crawl_state`.
 
 On boards migrated from older platforms (Yuku, InvisionFree), sources keep some import leftovers. Examples are `[table]` quote blocks, malformed tags like `[color=BLUE'>]`, and smileys hosted on dead sites. `scan` counts them rule by rule, with example posts. It also lists tags that don't open and close evenly, and bracketed words that aren't tags (`[sarcasm]`, ...).
+
+`fix` writes a repaired copy of each source to `posts.source_fixed`. `posts.source` is never modified. Every run recomputes the whole column, so fixes can be changed and rerun at any time (`--only FIX` applies just some of them). The fixes:
+
+| fix | before | after |
+|---|---|---|
+| attribute-leak | `[color=RED'>]` | `[color=RED]` |
+| quoted-url | `[url='x']` | `[url=x]` |
+| quoted-img | `[img]'x'[/img]` | `[img]x[/img]` |
+| size-100 | `[size=100]x[/size]` | `x` |
+| table-blocks | `[table][tr][td][b]QUOTE[/b] (name @ Nov 4 2005, 07:37 PM)[/td][/tr][tr][td]x[/td][/tr][/table]` | `[quote="name" date="Nov 4 2005, 07:37 PM"]x[/quote]` |
+| | the same table with `CODE` | `[code]x[/code]` |
+| smilies | `[img]http://static.yuku.com/.../tongue.gif[/img]` | `[ts:smiley=3]` |
+| old-links | `[url=http://metanet.2.forumer.com/index.php?showtopic=996&st=20]here[/url]` | `[ts:topic=996 start=20]here[/ts:topic]` |
+
+Tables and sizes are rewritten innermost first, so nested quotes come out right. Pairs that don't have the expected shape (unclosed, extra cells) are left as they are. The `date` attribute isn't standard phpBB. It keeps the date exactly as Yuku displayed it, in an unknown timezone.
+
+The last two fixes write sentinels: tags in a reserved `ts:` namespace that the board never accepted (tag names can't contain `:`). They stand for things a later stage resolves, such as a static mirror turning them into local images and links:
+
+- `[ts:smiley=ID]` is a row of the `smilies` table. `tapascrape smilies` gives every distinct smiley URL in posts and signatures a stable id: the dead hosts (Yuku, forumer, other Invision boards) and the board's own Tapatalk-hosted ones (`forum_data/.../smilies/`). It then downloads each image: Tapatalk-hosted ones from the board's website (asking for the original file, not Cloudflare's WebP conversion, and with the saved login if there is one), everything else from the Wayback Machine when it was archived. Run it before `fix`. Rerunning it only adds new URLs and looks up the images still missing. `--retry` also looks again for the ones found nowhere.
+- `[ts:topic=N start=S old_post=P]text[/ts:topic]` and `[ts:forum=N]text[/ts:forum]` replace links to the old forumer board (`metanet.2.forumer.com`): named links, `[url]` autolinks and bare URLs. Topic and forum ids survived the migration, so `N` is the current id. Post ids didn't, so `old_post` (from `findpost`/`#entry` links) only records the old one. Only ids present in the database are converted. User profiles, searches, attachments and truncated URLs are left as they are.
+
+Sentinels are never written inside `[code]` blocks, nor in a post whose source already contains `[ts:`.
+
+`fix` also processes signatures. Only their website HTML is available, so `users.signature_source` is BBCode rebuilt from it (the same way as `recover-sources`, with images Tapatalk serves through its `imageproxy.php` given their original URL back). `users.signature_fixed` is that BBCode with the same fixes applied.
 
 ## Login
 

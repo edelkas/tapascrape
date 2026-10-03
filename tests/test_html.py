@@ -121,3 +121,24 @@ def test_recover_sources(db):
     assert set(db.states(ORIGIN_PREFIX)) == {"112460", "112462"}
     assert set(db.states(SOURCE_GAP)) == {"112481"}
     assert recover_sources(web, db) == 0
+
+
+class FakeResponse:
+    def __init__(self, content, headers):
+        self.status_code, self.content, self.headers = 200, content, headers
+        self.text = ""
+
+
+def test_get_bytes_asks_for_the_unpolished_original(monkeypatch):
+    from tapascrape.net.throttle import RetryableError, Throttle
+    from tapascrape.net.web import WebClient
+    web = WebClient(BoardConfig("metanetfr", max_retries=0), throttle=Throttle(0), use_browser=False)
+    requested = []
+    answers = [FakeResponse(b"GIF89a original", {"content-type": "image/gif"}),
+               FakeResponse(b"GIF89a polished", {"content-type": "image/gif", "cf-polished": "ok"})]
+    monkeypatch.setattr(web.session, "get", lambda url, headers: requested.append(url) or answers.pop(0))
+    assert web.get_bytes("https://x/smilies/4.gif", original=True) == b"GIF89a original"
+    assert requested[0].startswith("https://x/smilies/4.gif?nocache=")
+    with pytest.raises(RetryableError):
+        web.get_bytes("https://x/smilies/4.gif", original=True)
+    assert requested[1] != requested[0]  # a new cache-busting value each time

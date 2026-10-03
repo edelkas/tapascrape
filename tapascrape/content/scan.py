@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import TextIO
 
 from tapascrape.db.base import Database
+from tapascrape.parse.bbcode import html_to_bbcode
 
 
 @dataclass(frozen=True)
@@ -131,10 +132,16 @@ def scan_text(report: ScanReport, post_id: int, text: str, examples: int = 3) ->
         report.unknown_examples.setdefault(name, post_id)
 
 
-def iter_sources(db: Database, batch: int = 5000) -> Iterator[tuple[int, str]]:
+SOURCE_COLUMNS = ("source", "source_fixed")
+
+
+def iter_sources(db: Database, batch: int = 5000,
+                 column: str = "source") -> Iterator[tuple[int, str]]:
+    """(id, text) of posts with a non-NULL `column`, in id order."""
+    assert column in SOURCE_COLUMNS
     last = -1
     while True:
-        rows = db.query("SELECT id, source FROM posts WHERE id > ? AND source IS NOT NULL "
+        rows = db.query(f"SELECT id, {column} FROM posts WHERE id > ? AND {column} IS NOT NULL "
                         "ORDER BY id LIMIT ?", (last, batch))
         if not rows:
             return
@@ -142,16 +149,24 @@ def iter_sources(db: Database, batch: int = 5000) -> Iterator[tuple[int, str]]:
         last = rows[-1][0]
 
 
-def scan(db: Database, examples: int = 3) -> ScanReport:
+def iter_signature_sources(db: Database) -> Iterator[tuple[int, str]]:
+    """(user id, BBCode) of every signature, rebuilt from its HTML."""
+    for user_id, html in db.query("SELECT id, signature FROM users "
+                                  "WHERE signature IS NOT NULL ORDER BY id"):
+        if html.strip():
+            yield user_id, html_to_bbcode(html)
+
+
+def scan(db: Database, examples: int = 3, column: str = "source") -> ScanReport:
     report = ScanReport()
-    for post_id, source in iter_sources(db):
+    for post_id, source in iter_sources(db, column=column):
         scan_text(report, post_id, source, examples)
     return report
 
 
-def matching_posts(db: Database, rule_name: str) -> Iterator[int]:
+def matching_posts(db: Database, rule_name: str, column: str = "source") -> Iterator[int]:
     pattern = RULES_BY_NAME[rule_name].pattern
-    for post_id, source in iter_sources(db):
+    for post_id, source in iter_sources(db, column=column):
         if pattern.search(source):
             yield post_id
 
@@ -160,7 +175,7 @@ def print_report(report: ScanReport, out: TextIO, unknown: int = 30) -> None:
     def pct(n: int) -> str:
         return f"{100 * n / report.posts:.1f}%" if report.posts else "-"
 
-    print(f"Scanned {report.posts:,} post sources.\n", file=out)
+    print(f"Scanned {report.posts:,} posts.\n", file=out)
     print("Rules (posts, occurrences):", file=out)
     for r in RULES:
         finding = report.rules[r.name]
