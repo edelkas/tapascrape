@@ -20,13 +20,13 @@ import asyncio
 import http.cookiejar
 import logging
 import time
-import uuid
 from pathlib import Path
 
 from curl_cffi import requests
 from curl_cffi.requests.exceptions import RequestException
 
 from tapascrape.config import BoardConfig
+from tapascrape.net.http import cache_busted
 from tapascrape.net.session import Session, board_user_id
 from tapascrape.net.throttle import RetryableError, Throttle
 
@@ -102,7 +102,7 @@ class WebClient:
         miss, which is answered with the file itself; a polished answer is refused.
         """
         if original:
-            url += ("&" if "?" in url else "?") + f"nocache={uuid.uuid4().hex}"
+            url = cache_busted(url)
 
         def attempt() -> requests.Response:
             log.debug("GET %s (curl_cffi, file)", url)

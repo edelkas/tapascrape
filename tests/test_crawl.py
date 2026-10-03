@@ -110,7 +110,7 @@ class FakeApi(TapatalkApi):
 
 @pytest.fixture
 def db(monkeypatch):
-    monkeypatch.setattr(users_module, "fetch_bytes", lambda url, throttle: b"PNG:" + url.encode())
+    monkeypatch.setattr(users_module, "fetch_bytes", lambda url, throttle, **kw: b"PNG:" + url.encode())
     with open_database(":memory:") as db:
         db.create_schema()
         yield db
@@ -336,3 +336,26 @@ def test_schema_migration_adds_new_columns(tmp_path):
         db.upsert_many("topics", [{"id": 2, "forum_id": 1, "name": "y", "stickied": False,
                                    "locked": True, "created_at": datetime(2020, 1, 1)}])
         assert db.query("SELECT locked FROM topics WHERE id = 2") == [(1,)]
+
+
+def test_refresh_avatars(db, monkeypatch):
+    from tapascrape.crawl.users import ORIGINAL_PREFIX, refresh_avatars
+    from tapascrape.net.throttle import Throttle
+    for user_id, data in ((1, b"polished"), (2, b"original2"), (3, b"old3")):
+        avatar_id = db.insert("avatars", {"user_id": user_id, "data": data})
+        db.upsert_many("users", [{"id": user_id, "name": f"u{user_id}",
+                                  "avatar_url": f"https://cdn/{user_id}.gif", "avatar_id": avatar_id}])
+    originals = {"https://cdn/1.gif": b"original1", "https://cdn/2.gif": b"original2"}  # 3 is gone
+    calls = []
+
+    def fake_fetch(url, throttle, original=False, **kw):
+        calls.append((url, original))
+        return originals.get(url)
+
+    monkeypatch.setattr(users_module, "fetch_bytes", fake_fetch)
+    assert refresh_avatars(db, Throttle(0)) == (1, 1)
+    assert all(original for _, original in calls)
+    assert db.query("SELECT user_id, data FROM avatars ORDER BY user_id") == [
+        (1, b"original1"), (2, b"original2"), (3, b"old3")]
+    assert db.states(ORIGINAL_PREFIX) == {"1": "done", "2": "done", "3": "gone"}
+    assert refresh_avatars(db, Throttle(0)) == (0, 0)  # resumable: nothing left

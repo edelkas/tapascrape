@@ -113,7 +113,7 @@ def store_user(db: Database, user: User, avatar_throttle: Throttle | None) -> No
 def store_avatar(db: Database, user_id: int, url: str, throttle: Throttle) -> None:
     """Download an avatar into `avatars` and point users.avatar_id at it."""
     try:
-        data = fetch_bytes(url, throttle)
+        data = fetch_bytes(url, throttle, original=True)
     except RetryableError as e:
         log.warning("avatar of user %d: %s", user_id, e)
         return
@@ -121,3 +121,45 @@ def store_avatar(db: Database, user_id: int, url: str, throttle: Throttle) -> No
         return
     avatar_id = db.insert("avatars", {"user_id": user_id, "data": data})
     db.update_many("users", [{"id": user_id, "avatar_id": avatar_id}])
+
+
+ORIGINAL_PREFIX = "avatar-original:"  # crawl_state: avatar re-downloaded as the original
+
+
+def refresh_avatars(db: Database, throttle: Throttle, redo: bool = False) -> tuple[int, int]:
+    """Re-download stored avatars as originals; (replaced, unchanged).
+
+    Avatars fetched before cache-busting may be Cloudflare's polished copies.
+    Rows are updated in place (same avatars.id). Resumable: each avatar checked
+    is tagged "avatar-original:<user id>"; `redo` checks them all again.
+    """
+    rows = db.query("SELECT u.id, u.avatar_url, a.id, a.data FROM users u "
+                    "JOIN avatars a ON a.id = u.avatar_id "
+                    "WHERE u.avatar_url IS NOT NULL ORDER BY u.id")
+    done = set() if redo else {int(k) for k in db.states(ORIGINAL_PREFIX)}
+    todo = [row for row in rows if row[0] not in done]
+    if not todo:
+        log.info("avatars: nothing to do")
+        return 0, 0
+    progress = Progress("avatars", len(todo))
+    replaced = unchanged = 0
+    for user_id, url, avatar_id, stored in todo:
+        try:
+            data = fetch_bytes(url, throttle, original=True)
+        except RetryableError as e:
+            log.warning("avatar of user %d: %s; will retry on the next run", user_id, e)
+            progress.advance()
+            continue
+        with db.transaction():
+            if data is None:
+                log.warning("avatar of user %d: gone (%s); keeping the stored copy", user_id, url)
+            elif data != stored:
+                db.update_many("avatars", [{"id": avatar_id, "data": data}])
+                log.debug("avatar of user %d: %d -> %d bytes", user_id, len(stored), len(data))
+                replaced += 1
+            else:
+                unchanged += 1
+            db.set_state(f"{ORIGINAL_PREFIX}{user_id}", "gone" if data is None else "done")
+        progress.advance()
+    log.info("avatars: %d replaced by the original, %d already were", replaced, unchanged)
+    return replaced, unchanged

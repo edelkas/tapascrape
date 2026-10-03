@@ -34,6 +34,9 @@ tapascrape scan --db sqlite:///metanet.db --fixed   # what's left
 # HTML pass: rank, signature, group names; recovers posts the API can't return.
 tapascrape enrich metanetfr --db sqlite:///metanet.db
 
+# Re-download avatars stored before downloads bypassed Cloudflare's recompressed copies.
+tapascrape avatars --db sqlite:///metanet.db
+
 tapascrape status   --db sqlite:///metanet.db   # row counts and pending work
 tapascrape finalize --db sqlite:///metanet.db   # recompute aggregate columns
 ```
@@ -62,6 +65,8 @@ All IDs are the board's own IDs. Datetimes are UTC. `posts.content` and `users.s
 - For forums, over their own topics (subforums not included): `post_count`, `view_count` and `last_post_id`.
 
 A few posts make Tapatalk's own backend fail with a MySQL collation error, for example an author name containing an emoji-range character. The API then errors for any range that includes them. The crawler narrows the range down to the bad posts, skips them, and records them as `post-gap:<topic>:<offset>` rows in `crawl_state`. `status` lists them. `enrich` recovers them from the topic's web page. Their content is then the website's HTML rendering, not the API's, and their timestamps have minute precision. Such posts are tagged `post-source:<id> = html` in `crawl_state`.
+
+Images Tapatalk serves (avatars, files under the board's `forum_data/`) pass through Cloudflare, whose cache returns "polished" copies: recompressed, sometimes lossily, so animated GIFs can lose frames. They come back as WebP if the request accepts it. Downloads add a unique query parameter to bypass that cache, and refuse any answer marked `cf-polished`, so files are stored as they were uploaded.
 
 Users come from the API's member list, which covers every registered member (including those who never posted) and doesn't need a login, unlike the website's. Authors missing from it (deleted accounts) keep a row with just `id` and `name`, taken from their posts.
 

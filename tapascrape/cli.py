@@ -19,7 +19,7 @@ from tapascrape.crawl.sources import GAP_PREFIX as SOURCE_GAP_PREFIX
 from tapascrape.crawl.sources import (ORIGIN_PREFIX, crawl_sources, pending_sources,
                                       recover_sources)
 from tapascrape.crawl.topics import crawl_topics
-from tapascrape.crawl.users import crawl_members, crawl_users, pending_users
+from tapascrape.crawl.users import crawl_members, crawl_users, pending_users, refresh_avatars
 from tapascrape.db import open_database
 from tapascrape.db.schema import TABLES
 from tapascrape.net.api import AuthError, TapatalkApi
@@ -257,6 +257,13 @@ def cmd_smilies(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_avatars(args: argparse.Namespace) -> int:
+    with open_database(args.db) as db:
+        db.create_schema()
+        refresh_avatars(db, Throttle(args.rate), redo=args.redo)
+    return 0
+
+
 def cmd_finalize(args: argparse.Namespace) -> int:
     with open_database(args.db) as db:
         db.create_schema()
@@ -399,6 +406,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--retry", action="store_true",
                    help="look again for smileys previously found not to be archived")
     p.set_defaults(func=cmd_smilies)
+
+    p = sub.add_parser("avatars", help="re-download stored avatars as originals (not Cloudflare's "
+                                       "recompressed copies)")
+    p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
+    p.add_argument("--rate", type=float, default=1.0, help="max requests per second (default 1)")
+    p.add_argument("--redo", action="store_true", help="check avatars already re-downloaded again")
+    p.set_defaults(func=cmd_avatars)
 
     for name, func, help in (("finalize", cmd_finalize, "recompute aggregate columns"),
                              ("status", cmd_status, "show row counts and pending work")):

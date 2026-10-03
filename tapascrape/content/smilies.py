@@ -18,6 +18,7 @@ from urllib.parse import unquote
 
 from tapascrape.content.scan import iter_signature_sources, iter_sources
 from tapascrape.db.base import Database
+from tapascrape.net.http import ORIGINAL_IMAGES
 from tapascrape.net.throttle import RetryableError, Throttle
 from tapascrape.net.wayback import ArchivedFile, fetch_archived_image, image_type
 from tapascrape.net.web import WebClient
@@ -103,10 +104,6 @@ def pending_smilies(db: Database, retry: bool = False) -> list[tuple[int, str, s
     missing = set() if retry else {int(k) for k in db.states(MISSING_PREFIX)}
     return [row for row in db.query("SELECT id, url, host FROM smilies WHERE data IS NULL ORDER BY id")
             if row[0] not in missing]
-
-
-# No image/webp: Cloudflare would answer with a WebP conversion instead of the file itself.
-ORIGINAL_IMAGES = "image/gif,image/png,image/jpeg;q=0.9,*/*;q=0.5"
 
 
 def tapatalk_fetcher(web: WebClient) -> Callable[[str], ArchivedFile | None]:
