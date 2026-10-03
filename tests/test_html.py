@@ -8,6 +8,8 @@ import pytest
 from tapascrape.config import BoardConfig
 from tapascrape.crawl.enrich import SOURCE_PREFIX, enrich_profiles, pending_profiles, recover_gaps
 from tapascrape.crawl.posts import GAP_PREFIX
+from tapascrape.crawl.sources import GAP_PREFIX as SOURCE_GAP
+from tapascrape.crawl.sources import ORIGIN_PREFIX, recover_sources
 from tapascrape.db import open_database
 from tapascrape.models import Group
 from tapascrape.net.web import is_challenge
@@ -94,3 +96,28 @@ def test_recover_gaps(db):
     assert db.query("SELECT name FROM users WHERE id = 9370552") == [("LittleViking",)]
     assert db.states(GAP_PREFIX) == {}
     assert db.get_state(f"{SOURCE_PREFIX}112460") == "html"
+
+
+def test_recover_sources(db):
+    # 112460 and 112462 have no source; 112481 has one, which must be left alone.
+    db.upsert_many("posts", [
+        {"id": 112460, "topic_id": 199, "index": 1728, "content": "api", "source": None},
+        {"id": 112462, "topic_id": 199, "index": 1729, "content": "api", "source": None},
+        {"id": 112481, "topic_id": 199, "index": 1730, "content": "api", "source": "original"},
+    ])
+    for post_id in (112460, 112462, 112481):
+        db.set_state(f"{SOURCE_GAP}{post_id}", "SQL ERROR ...")
+    web = FakeWeb({"viewtopic.php?t=199&start=1727": fixture("topic_199_s1727.html")})
+    assert recover_sources(web, db) == 2
+    assert web.requested == ["viewtopic.php?t=199&start=1727"]  # one page for both posts
+    sources = dict(db.query("SELECT id, source FROM posts"))
+    assert sources[112462] == ("[table][tr][td][b]QUOTE[/b] (spzbt @ Nov 5 2005, 12:12 AM)[/td][/tr]"
+                               "[tr][td] Wow, that's weird.  Look up at the post kyubbi... It's "
+                               "messed up.  [/td][/tr][/table] \n nothing looks wierd on my "
+                               "computer..nothing at all")
+    assert sources[112460].endswith("Very strange...\n\nAnyway, post edited.")
+    assert sources[112481] == "original"
+    assert db.query("SELECT content FROM posts WHERE id = 112460") == [("api",)]
+    assert set(db.states(ORIGIN_PREFIX)) == {"112460", "112462"}
+    assert set(db.states(SOURCE_GAP)) == {"112481"}
+    assert recover_sources(web, db) == 0

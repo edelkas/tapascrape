@@ -9,6 +9,10 @@ recorded as "source-gap:<post id>" and skipped on later runs. An expired
 session (AuthError) is never treated as a bad post.
 
 Resumable without extra state: it only fetches posts whose source is NULL.
+
+Gaps can then be recovered from the website (recover_sources): the post's
+rendered HTML is turned back into BBCode (see parse.bbcode), and the post is
+tagged "source-origin:<id>" = "html" since that source is a reconstruction.
 """
 
 import logging
@@ -16,10 +20,14 @@ import logging
 from tapascrape.crawl.progress import Progress
 from tapascrape.db.base import Database
 from tapascrape.net.api import ApiError, AuthError, SplitError, TapatalkApi
+from tapascrape.net.web import WebClient
+from tapascrape.parse.bbcode import html_to_bbcode
+from tapascrape.parse.topic import parse_topic_posts
 
 log = logging.getLogger(__name__)
 
 GAP_PREFIX = "source-gap:"
+ORIGIN_PREFIX = "source-origin:"
 # A batch this large in which every single post fails points to a board-wide
 # problem (maintenance, rate limiting...) rather than bad posts: stop instead.
 SYSTEMIC_FAILURE_BATCH = 10
@@ -89,3 +97,37 @@ def crawl_sources(api: TapatalkApi, db: Database, forum_ids: list[int] | None = 
         progress.advance(len(batch))
     log.info("sources: %d stored", stored)
     return stored
+
+
+def recover_sources(web: WebClient, db: Database) -> int:
+    """Rebuild the source of gap posts from the website; posts with a source are left alone."""
+    gaps = {int(k) for k in db.states(GAP_PREFIX)}
+    todo = {post_id: (topic_id, index) for post_id, topic_id, index in db.query(
+        f"SELECT id, topic_id, {db.quote_ident('index')} FROM posts WHERE source IS NULL")
+        if post_id in gaps}
+    if not todo:
+        log.info("recover sources: nothing to do")
+        return 0
+    log.info("recover sources: %d posts without a source", len(todo))
+    recovered = 0
+    for post_id, (topic_id, index) in sorted(todo.items(), key=lambda item: item[1]):
+        if post_id not in todo:
+            continue  # recovered from an earlier page
+        # Start the page at this post; the following posts on it come along too.
+        html = web.get(f"viewtopic.php?t={topic_id}&start={max(index - 1, 0)}")
+        found = {p.id: p for p in parse_topic_posts(html) if p.id in todo}
+        if post_id not in found:
+            log.warning("post %d (topic %d #%d): not on the topic page", post_id, topic_id, index)
+            del todo[post_id]
+            continue
+        with db.transaction():
+            for post in found.values():
+                db.update_many("posts", [{"id": post.id, "source": html_to_bbcode(post.content)}])
+                db.set_state(f"{ORIGIN_PREFIX}{post.id}", "html")
+                db.delete_state(f"{GAP_PREFIX}{post.id}")
+        for found_id in found:
+            log.info("post %d: source rebuilt from the website", found_id)
+            del todo[found_id]
+        recovered += len(found)
+    log.info("recover sources: %d recovered", recovered)
+    return recovered

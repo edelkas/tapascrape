@@ -5,12 +5,14 @@ import logging
 import sys
 
 from tapascrape.config import BoardConfig
+from tapascrape.content.scan import RULES_BY_NAME, matching_posts, print_report, scan
 from tapascrape.crawl.enrich import enrich_profiles, pending_profiles, recover_gaps
 from tapascrape.crawl.finalize import finalize
 from tapascrape.crawl.forums import print_tree, store_forums, survey
 from tapascrape.crawl.posts import GAP_PREFIX, crawl_posts, pending_topics
 from tapascrape.crawl.sources import GAP_PREFIX as SOURCE_GAP_PREFIX
-from tapascrape.crawl.sources import crawl_sources, pending_sources
+from tapascrape.crawl.sources import (ORIGIN_PREFIX, crawl_sources, pending_sources,
+                                      recover_sources)
 from tapascrape.crawl.topics import crawl_topics
 from tapascrape.crawl.users import crawl_members, crawl_users, pending_users
 from tapascrape.db import open_database
@@ -118,14 +120,16 @@ def cmd_crawl(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_enrich(args: argparse.Namespace) -> int:
-    config = BoardConfig(args.board, rate=args.rate)
+def make_web(args: argparse.Namespace) -> WebClient:
     session = load_session(args)
     profile_dir = session_dir(args.board, args.session_dir) / "chrome-profile" if session else None
-    with open_database(args.db) as db, WebClient(
-            config, cookies_file=args.cookies, user_agent=args.user_agent,
-            use_browser=not args.no_browser, impersonate=args.impersonate,
-            login=session, profile_dir=profile_dir) as web:
+    return WebClient(BoardConfig(args.board, rate=args.rate), cookies_file=args.cookies,
+                     user_agent=args.user_agent, use_browser=not args.no_browser,
+                     impersonate=args.impersonate, login=session, profile_dir=profile_dir)
+
+
+def cmd_enrich(args: argparse.Namespace) -> int:
+    with open_database(args.db) as db, make_web(args) as web:
         db.create_schema()
         if not args.no_gaps:
             recover_gaps(web, db)
@@ -172,6 +176,25 @@ def cmd_sources(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_recover_sources(args: argparse.Namespace) -> int:
+    with open_database(args.db) as db, make_web(args) as web:
+        db.create_schema()
+        recover_sources(web, db)
+        print_status(db, sys.stdout)
+    return 0
+
+
+def cmd_scan(args: argparse.Namespace) -> int:
+    with open_database(args.db) as db:
+        db.create_schema()
+        if args.rule:
+            for post_id in matching_posts(db, args.rule):
+                print(post_id)
+            return 0
+        print_report(scan(db, examples=args.examples), sys.stdout, unknown=args.unknown)
+    return 0
+
+
 def cmd_finalize(args: argparse.Namespace) -> int:
     with open_database(args.db) as db:
         db.create_schema()
@@ -197,6 +220,9 @@ def print_status(db, out) -> None:
     source_gaps = len(db.states(SOURCE_GAP_PREFIX))
     if source_gaps:
         print(f"{'no source':>12}: {source_gaps:,} posts", file=out)
+    rebuilt = len(db.states(ORIGIN_PREFIX))
+    if rebuilt:
+        print(f"{'rebuilt':>12}: {rebuilt:,} post sources rebuilt from the website's HTML", file=out)
     gaps = sorted(tuple(map(int, key.split(":"))) for key in db.states(GAP_PREFIX))
     if gaps:
         listed = ", ".join(f"topic {t} #{o + 1}" for t, o in gaps[:10])
@@ -245,17 +271,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-avatars", action="store_true", help="skip downloading avatars")
     p.set_defaults(func=cmd_crawl)
 
+    def web_options(p: argparse.ArgumentParser) -> None:
+        p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
+        p.add_argument("--cookies", metavar="FILE",
+                       help="cookies.txt (Netscape format) from your browser")
+        p.add_argument("--user-agent", help="exact User-Agent of the browser the cookies come from")
+        p.add_argument("--no-browser", action="store_true",
+                       help="never open Chrome to pass Cloudflare (needs --cookies)")
+        p.add_argument("--impersonate", default="chrome",
+                       help="curl_cffi browser fingerprint matching the cookies' browser "
+                            "(default chrome)")
+
     p = board_command("enrich", "HTML pass: rank, signature, group names; recover unfetchable posts")
-    p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
+    web_options(p)
     p.add_argument("--refresh", action="store_true", help="re-fetch already enriched profiles")
     p.add_argument("--no-profiles", action="store_true", help="skip user profiles")
     p.add_argument("--no-gaps", action="store_true", help="skip recovering unfetchable posts")
-    p.add_argument("--cookies", metavar="FILE", help="cookies.txt (Netscape format) from your browser")
-    p.add_argument("--user-agent", help="exact User-Agent of the browser the cookies come from")
-    p.add_argument("--no-browser", action="store_true",
-                   help="never open Chrome to pass Cloudflare (needs --cookies)")
-    p.add_argument("--impersonate", default="chrome",
-                   help="curl_cffi browser fingerprint matching the cookies' browser (default chrome)")
     p.set_defaults(func=cmd_enrich)
 
     p = board_command("sources", "fetch posts' original BBCode into posts.source (needs `login`)",
@@ -267,6 +298,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--retry-gaps", action="store_true",
                    help="try again the posts previously recorded as having no source")
     p.set_defaults(func=cmd_sources)
+
+    p = board_command("recover-sources",
+                      "rebuild the BBCode of posts `sources` couldn't fetch from the website's HTML")
+    web_options(p)
+    p.set_defaults(func=cmd_recover_sources)
+
+    p = sub.add_parser("scan", help="report markup problems in post sources; writes nothing")
+    p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
+    p.add_argument("--examples", type=int, default=3, metavar="N",
+                   help="example posts per rule (default 3)")
+    p.add_argument("--unknown", type=int, default=30, metavar="N",
+                   help="how many non-tag bracketed words to list (default 30)")
+    p.add_argument("--rule", choices=sorted(RULES_BY_NAME),
+                   help="instead of the report, print the ids of every post matching this rule")
+    p.set_defaults(func=cmd_scan)
 
     for name, func, help in (("finalize", cmd_finalize, "recompute aggregate columns"),
                              ("status", cmd_status, "show row counts and pending work")):

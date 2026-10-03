@@ -21,6 +21,11 @@ tapascrape login metanetfr
 
 # Original BBCode of every post into posts.source (needs `login`; ~9 h for 460k posts).
 tapascrape sources metanetfr --db sqlite:///metanet.db
+# Rebuild the BBCode of the few posts `sources` couldn't fetch, from the website's HTML.
+tapascrape recover-sources metanetfr --db sqlite:///metanet.db --login
+
+# Report markup problems in the sources (writes nothing); --rule NAME lists matching post ids.
+tapascrape scan --db sqlite:///metanet.db
 
 # HTML pass: rank, signature, group names; recovers posts the API can't return.
 tapascrape enrich metanetfr --db sqlite:///metanet.db
@@ -65,7 +70,9 @@ Users come from the API's member list, which covers every registered member (inc
 - Posts with no source available are recorded as `source-gap:<id>` in `crawl_state`.
 - Reruns only fetch posts whose `source` is still NULL.
 
-On boards migrated from older platforms (Yuku, InvisionFree), sources keep some import leftovers, such as `[table]` quote blocks or malformed tags like `[color=BLUE'>]`.
+`recover-sources` fills in those gaps from the topic's web page by turning the rendered HTML back into BBCode. Posts that already have a source are never touched. The board renders malformed tags as literal text, so they survive the round trip. Some details can't be recovered from the HTML: links lose the quotes around their URL, tags come back in lowercase, and spoiler titles are lost. On posts whose real source is known, about 80% come back identical. Rebuilt posts are tagged `source-origin:<id> = html` in `crawl_state`.
+
+On boards migrated from older platforms (Yuku, InvisionFree), sources keep some import leftovers. Examples are `[table]` quote blocks, malformed tags like `[color=BLUE'>]`, and smileys hosted on dead sites. `scan` counts them rule by rule, with example posts. It also lists tags that don't open and close evenly, and bracketed words that aren't tags (`[sarcasm]`, ...).
 
 ## Login
 
