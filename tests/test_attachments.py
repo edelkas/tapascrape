@@ -60,7 +60,7 @@ def db():
 
 def test_collect(db):
     assert collect_attachments(db) == 3
-    assert db.query("SELECT id, kind, url, name, old_member_id, old_attach_id, first_post_id, uses "
+    assert db.query("SELECT id, kind, url, name, old_forum_id, old_attach_id, first_post_id, uses "
                     "FROM attachments ORDER BY id") == [
         (1, "upload", PNG, "post-1-1181593950.png", 1, None, 3, 2),
         (2, "attach-id", ACT, None, None, 52852, 3, 1),

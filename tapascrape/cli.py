@@ -281,6 +281,34 @@ def cmd_avatars(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_metanet_import(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from tapascrape.boards.metanet.importer import import_dump
+
+    with open_database(args.db) as db:
+        db.create_schema()
+        report = import_dump(db, Path(args.dump))
+    print_report_counts(report)
+    return 0
+
+
+def cmd_metanet_link(args: argparse.Namespace) -> int:
+    from tapascrape.boards.metanet.link import link
+
+    with open_database(args.db) as db:
+        db.create_schema()
+        report = link(db)
+    print_report_counts(report)
+    return 0
+
+
+def print_report_counts(report) -> None:
+    width = max(map(len, report), default=0)
+    for key in sorted(report):
+        print(f"{key:>{width}}: {report[key]:,}")
+
+
 def cmd_finalize(args: argparse.Namespace) -> int:
     with open_database(args.db) as db:
         db.create_schema()
@@ -440,6 +468,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--rate", type=float, default=1.0, help="max requests per second (default 1)")
     p.add_argument("--redo", action="store_true", help="check avatars already re-downloaded again")
     p.set_defaults(func=cmd_avatars)
+
+    p = sub.add_parser("metanet", help="Metanet Forums only: data from the board's Forumer era "
+                                       "(a 2019 Wayback Machine dump of metanet.2.forumer.com)")
+    metanet = p.add_subparsers(dest="metanet_command", required=True)
+    p = metanet.add_parser("import-dump", help="read the dump into the forumer_* tables")
+    p.add_argument("dump", help="the dump's folder (with index.php_* pages and a/)")
+    p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
+    p.set_defaults(func=cmd_metanet_import)
+    p = metanet.add_parser("link", help="map the dump's member, post and attachment ids to ours; "
+                                        "store the attachment files it has")
+    p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
+    p.set_defaults(func=cmd_metanet_link)
 
     for name, func, help in (("finalize", cmd_finalize, "recompute aggregate columns"),
                              ("status", cmd_status, "show row counts and pending work")):

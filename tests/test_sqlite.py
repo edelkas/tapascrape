@@ -52,6 +52,16 @@ def test_reserved_word_columns(db):
     assert db.query("SELECT COUNT(*) FROM group_users") == [(1,)]
 
 
+def test_renamed_column_is_migrated():
+    with open_database(":memory:") as db:
+        db.execute('CREATE TABLE attachments (id INTEGER NOT NULL, kind TEXT NOT NULL, '
+                   'url TEXT NOT NULL, old_member_id INTEGER, PRIMARY KEY (id))')
+        db.execute("INSERT INTO attachments VALUES (1, 'upload', 'u', 33)")
+        db.create_schema()
+        db.create_schema()
+        assert db.query("SELECT old_forum_id, data FROM attachments") == [(33, None)]
+
+
 def test_avatar_autoincrement_and_state(db):
     assert db.insert("avatars", {"user_id": 1, "data": b"\x89PNG"}) == 1
     assert db.get_state("topic:1") is None

@@ -58,7 +58,7 @@ All IDs are the board's own IDs. Datetimes are UTC. `posts.content` and `users.s
 | groups | id, name |
 | group_users | group_id, user_id |
 | smilies | id, url, name, host, uses, content_type, data, recovered_from |
-| attachments | id, kind, url, name, old_member_id, uploaded_at, old_attach_id, first_post_id, uses, content_type, size, data, recovered_from |
+| attachments | id, kind, url, name, old_forum_id, uploaded_at, old_attach_id, first_post_id, uses, content_type, size, data, recovered_from |
 | crawl_state | key, value |
 
 `finalize` computes these columns:
@@ -109,11 +109,50 @@ The last two fixes write sentinels: tags in a reserved `ts:` namespace that the 
 - `[ts:smiley=ID]` is a row of the `smilies` table. `tapascrape smilies` gives every distinct smiley URL in posts and signatures a stable id: the dead hosts (Yuku, forumer, other Invision boards) and the board's own Tapatalk-hosted ones (`forum_data/.../smilies/`). It then downloads each image: Tapatalk-hosted ones from the board's website (asking for the original file, not Cloudflare's WebP conversion, and with the saved login if there is one), everything else from the Wayback Machine when it was archived. Run it before `fix`. Rerunning it only adds new URLs and looks up the images still missing. `--retry` also looks again for the ones found nowhere.
 - `[ts:topic=N start=S old_post=P]text[/ts:topic]` and `[ts:forum=N]text[/ts:forum]` replace links to the old forumer board (`metanet.2.forumer.com`): named links, `[url]` autolinks and bare URLs. Topic and forum ids survived the migration, so `N` is the current id. Post ids didn't, so `old_post` (from `findpost`/`#entry` links) only records the old one. Only ids present in the database are converted. User profiles, searches, attachments and truncated URLs are left as they are.
 
-- `[ts:attachment=ID]` (the block migrated posts end with), `[ts:attachment-image=ID]` (an embedded upload) and `[ts:attachment-link=ID]text[/ts:attachment-link]` (a link to one) are rows of the `attachments` table: files uploaded to the old forumer board. `fix` lists them before rewriting. The relative `/attach/ma/<file>` links were forumer's `http://2.forumer.com/uploads/metanet/<file>`, and the file name, `post-<member>-<unix time>.<ext>`, gives the old member id and the upload time. `act=Attach&id=N` downloads are listed by id. `tapascrape attachments` then recovers the files: forumer's domains are parked (any URL answers with the same HTML page, which is detected and not stored), so they come from the Wayback Machine. It lists each upload directory's captures with a single query, and only downloads files that were archived. Each download is checked to really be the file (images must be images, no HTML pages), and the original file name is kept when the archived response has one. Files found nowhere are recorded as `attachment-missing:<id>` and skipped on later runs unless `--retry` is given.
+- `[ts:attachment=ID]` (the block migrated posts end with), `[ts:attachment-image=ID]` (an embedded upload) and `[ts:attachment-link=ID]text[/ts:attachment-link]` (a link to one) are rows of the `attachments` table: files uploaded to the old forumer board. `fix` lists them before rewriting. The relative `/attach/ma/<file>` links were forumer's `http://2.forumer.com/uploads/metanet/<file>`, and the file name, `post-<forum>-<unix time>.<ext>`, gives the forum it was uploaded in (at the time) and the upload time. `act=Attach&id=N` downloads are listed by id. `tapascrape attachments` then recovers the files: forumer's domains are parked (any URL answers with the same HTML page, which is detected and not stored), so they come from the Wayback Machine. It lists each upload directory's captures with a single query, and only downloads files that were archived. Each download is checked to really be the file (images must be images, no HTML pages), and the original file name is kept when the archived response has one. Files found nowhere are recorded as `attachment-missing:<id>` and skipped on later runs unless `--retry` is given.
 
 Sentinels are never written inside `[code]` blocks, nor in a post whose source already contains `[ts:`.
 
 `fix` also processes signatures. Only their website HTML is available, so `users.signature_source` is BBCode rebuilt from it (the same way as `recover-sources`, with images Tapatalk serves through its `imageproxy.php` given their original URL back). `users.signature_fixed` is that BBCode with the same fixes applied.
+
+## Metanet: the Forumer era
+
+Board-specific extras live under `tapascrape/boards/` and the `metanet` command group. The general commands never load them.
+
+Before Yuku and Tapatalk, Metanet Forums was an Invision Power Board on Forumer (`metanet.2.forumer.com`). A 2019 Wayback Machine dump of that site holds what the migrations dropped. It covers about 36.7k posts with their old ids from 2004–2008, and the full member list with old ids.
+
+```sh
+tapascrape metanet import-dump forumer_wayback_machine --db sqlite:///metanet.db   # -> forumer_* tables
+tapascrape metanet link --db sqlite:///metanet.db   # old ids -> ours; stores the dump's attachment files
+```
+
+Both commands can be rerun. `import-dump` skips the dump's error, login-only and parked-domain pages. It understands the board's skins, which use different date formats.
+
+| table | what |
+|---|---|
+| forumer_members | old_id, name, user_id, match, group_name, title, joined_at, post_count, avatar_url, country, signature, birthday, location, specific_location, interests, website, msn, aim, yahoo, icq, integrity |
+| forumer_posts | id (old post id), topic_id, forum_id, post_id, match, member_id, author, posted, posted_at, html, edited_by, edited_at, source_file |
+| forumer_topics | id, forum_id, title, description, started_at, pinned, poll (JSON with vote counts), in_tapatalk |
+| forumer_attachments | old_post_id, ref, kind, name (original file name), downloads, attachment_id, content_type, data, source_file |
+| forumer_archive_posts | topic_id, position, author, posted_on, html, post_id: the lite archive (`a/`), which has no post ids |
+| forumer_emoticons | url, code: what members typed for each smiley image |
+
+The profile fields (birthday, location, messenger ids, which are often e-mail addresses) are personal data. Keep them out of anything published.
+
+`link` fills the columns that point at our tables, and `match` says how each link was made:
+
+- **Members.** Tapatalk numbered the migrated members in their old order.
+  - Unique exact names anchor the mapping (`name`).
+  - Members between two anchors pair up by position when both sides have the same number (`position`). This gives back the names of the ~800 accounts Tapatalk lists only by their id. Join dates agree on every checkable pair.
+  - Members left over take the author of their linked posts (`posts`).
+- **Posts.** Topic ids survived the migrations, and forumer showed UTC times to the minute.
+  - A post is ours if it is from the same topic and the same minute (`time`).
+  - Ties are broken by author (`time+author`), then by order (`time+order`).
+  - Guest posts (Tapatalk's `user_id` 0) get their author's name this way.
+- **Linked old post ids** (`old_post=` in `[ts:topic]` sentinels) that the dump lacks are placed between their matched neighbours, since old ids grow with time. The link is made when the topic has a single post in that window (`interpolated`). Holding out 3,000 known posts, this placed 99% and placed none wrongly.
+- **Attachments.** Forumer's `act=Attach&id=N` used the post's own id. So a linked post ties its attachment box (original name, download count) to the `attachments` row of the file its source links. Files the dump has are stored there (`recovered_from = forumer-dump:<file>`).
+
+Topics the dump has but Tapatalk doesn't keep their posts in `forumer_posts` (`post_id` NULL, `forumer_topics.in_tapatalk` false).
 
 ## Login
 

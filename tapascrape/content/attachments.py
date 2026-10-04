@@ -5,7 +5,7 @@ Posts reference them in three forms:
 - the attachment block every migrated post with attachments ends with,
   "--------------------[url=/attach/ma/post-10-1081445810.txt]Click here to
   view the attachment[/url]": a relative link to the file forumer kept as
-  uploads/metanet/post-<member>-<unix time>.<ext>;
+  uploads/metanet/post-<forum>-<unix time>.<ext> (the forum it was uploaded in);
 - direct links and [img] embeds of those uploads (and a few other forumer
   boards'): http://2.forumer.com/uploads/metanet/...;
 - forumer's attachment downloads by id: index.php?act=Attach&type=post&id=N.
@@ -60,7 +60,7 @@ class Attachment:
     kind: str  # "upload" or "attach-id"
     url: str   # canonical
     name: str | None = None
-    old_member_id: int | None = None
+    old_forum_id: int | None = None
     uploaded_at: datetime | None = None
     old_attach_id: int | None = None
 
@@ -89,11 +89,11 @@ def upload(url: str) -> Attachment | None:
     name = unquote(PurePosixPath(urlsplit(url).path).name)
     if not name:
         return None
-    member = uploaded = None
+    forum = uploaded = None
     if match := UPLOAD_NAME.fullmatch(name):
-        member = int(match.group(1))
+        forum = int(match.group(1))
         uploaded = datetime.fromtimestamp(int(match.group(2)), tz=timezone.utc).replace(tzinfo=None)
-    return Attachment("upload", url, name, member, uploaded)
+    return Attachment("upload", url, name, forum, uploaded)
 
 
 def attachment_ids(db: Database) -> dict[str, int]:
@@ -133,7 +133,7 @@ def collect_attachments(db: Database) -> int:
             continue
         a = found[url]
         inserts.append({"id": next_id, "kind": a.kind, "url": a.url, "name": a.name,
-                        "old_member_id": a.old_member_id, "uploaded_at": a.uploaded_at,
+                        "old_forum_id": a.old_forum_id, "uploaded_at": a.uploaded_at,
                         "old_attach_id": a.old_attach_id, **counts})
         next_id += 1
     with db.transaction():

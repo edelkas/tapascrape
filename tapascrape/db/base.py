@@ -54,14 +54,19 @@ class Database(ABC):
 
     # -- shared behaviour ------------------------------------------------
 
-    def create_schema(self) -> None:
-        """Create missing tables and add columns introduced since the DB was made."""
-        for table in TABLES:
+    def create_schema(self, tables: Sequence[Table] = TABLES) -> None:
+        """Create missing tables and add (or rename) columns changed since the DB was made."""
+        for table in tables:
             existing = self.existing_columns(table)
             if existing is None:
                 for sql in self.create_table_statements(table):
                     self._execute(sql)
                 continue
+            for old, new in table.renamed:
+                if old in existing and new not in existing:
+                    self._execute(f"ALTER TABLE {self.quote_ident(table.name)} RENAME COLUMN "
+                                  f"{self.quote_ident(old)} TO {self.quote_ident(new)}")
+                    existing = (existing - {old}) | {new}
             for column in table.columns:
                 if column.name not in existing:
                     # Added columns stay nullable: old rows have no value for them.

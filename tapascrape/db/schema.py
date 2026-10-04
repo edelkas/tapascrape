@@ -35,6 +35,7 @@ class Table:
     columns: tuple[Column, ...]
     primary_key: tuple[str, ...]
     indexes: tuple[Index, ...] = ()
+    renamed: tuple[tuple[str, str], ...] = ()  # (old name, new name) of renamed columns
 
     @property
     def column_names(self) -> list[str]:
@@ -129,7 +130,7 @@ ATTACHMENTS = Table("attachments", (
     Column("kind", TEXT, nullable=False),  # "upload" (a file name) or "attach-id" (act=Attach&id=N)
     Column("url", TEXT, nullable=False),   # canonical original URL
     Column("name", TEXT),                  # file name, e.g. "post-10-1081445810.txt"
-    Column("old_member_id", INT),          # forumer member id, from post-<member>-<time>.<ext>
+    Column("old_forum_id", INT),           # forum it was uploaded in, from post-<forum>-<time>.<ext>
     Column("uploaded_at", DATETIME),       # from the same name (unix time)
     Column("old_attach_id", INT),          # forumer attachment id, for "attach-id"
     Column("first_post_id", INT),          # first post referencing it (NULL: only signatures)
@@ -138,7 +139,7 @@ ATTACHMENTS = Table("attachments", (
     Column("size", INT),
     Column("data", BLOB),                  # NULL until recovered
     Column("recovered_from", TEXT),        # where `data` came from (e.g. a Wayback capture)
-), primary_key=("id",))
+), primary_key=("id",), renamed=(("old_member_id", "old_forum_id"),))
 
 # Bookkeeping for resumable crawls (e.g. "topic:6364" -> "done").
 CRAWL_STATE = Table("crawl_state", (
@@ -149,3 +150,13 @@ CRAWL_STATE = Table("crawl_state", (
 TABLES = (FORUMS, TOPICS, POSTS, USERS, AVATARS, GROUPS, GROUP_USERS, SMILIES, ATTACHMENTS,
           CRAWL_STATE)
 TABLES_BY_NAME = {t.name: t for t in TABLES}
+
+
+def register(*tables: Table) -> None:
+    """Make extra tables (e.g. a board-specific module's) usable with upsert_many & co.
+
+    They aren't part of TABLES: only the code that defines them creates them,
+    through Database.create_schema(tables).
+    """
+    for table in tables:
+        TABLES_BY_NAME[table.name] = table
