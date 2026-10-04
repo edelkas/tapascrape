@@ -303,6 +303,26 @@ def cmd_metanet_link(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_metanet_attachments(args: argparse.Namespace) -> int:
+    from tapascrape.boards.metanet.recover import recover_attachments
+
+    with open_database(args.db) as db:
+        db.create_schema()
+        report = recover_attachments(db, Throttle(args.rate), retry=args.retry)
+    print_report_counts(report)
+    return 0
+
+
+def cmd_metanet_avatars(args: argparse.Namespace) -> int:
+    from tapascrape.boards.metanet.recover import recover_avatars
+
+    with open_database(args.db) as db:
+        db.create_schema()
+        report = recover_avatars(db, Throttle(args.rate), retry=args.retry)
+    print_report_counts(report)
+    return 0
+
+
 def print_report_counts(report) -> None:
     width = max(map(len, report), default=0)
     for key in sorted(report):
@@ -480,6 +500,19 @@ def build_parser() -> argparse.ArgumentParser:
                                         "store the attachment files it has")
     p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
     p.set_defaults(func=cmd_metanet_link)
+    for name, func, help, retry in (
+            ("attachments", cmd_metanet_attachments,
+             "recover attachments from forumer's archived act=Attach downloads (Wayback Machine); "
+             "run after link", "look again at downloads that gave nothing"),
+            ("avatars", cmd_metanet_avatars,
+             "recover members' forumer-era avatars into forumer_avatars (Wayback Machine); "
+             "run after import-dump", "look again for avatars found nowhere")):
+        p = metanet.add_parser(name, help=help)
+        p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
+        p.add_argument("--rate", type=float, default=0.2,
+                       help="max requests per second to web.archive.org (default 0.2)")
+        p.add_argument("--retry", action="store_true", help=retry)
+        p.set_defaults(func=func)
 
     for name, func, help in (("finalize", cmd_finalize, "recompute aggregate columns"),
                              ("status", cmd_status, "show row counts and pending work")):

@@ -74,10 +74,12 @@ class Capture:
     mimetype: str
 
 
-def prefix_captures(prefix: str, throttle: Throttle, page_size: int = 50000) -> list[Capture]:
+def prefix_captures(prefix: str, throttle: Throttle, page_size: int = 50000,
+                    original: str | None = None) -> list[Capture]:
     """Every capture archived with HTTP 200 of the URLs starting with `prefix`.
 
-    One query lists a whole directory, instead of a lookup per file.
+    One query lists a whole directory, instead of a lookup per file. `original`
+    (a regex over the whole archived URL) narrows it down on archive.org's side.
     """
     captures: list[Capture] = []
     resume = None
@@ -85,6 +87,8 @@ def prefix_captures(prefix: str, throttle: Throttle, page_size: int = 50000) -> 
         params = [("url", prefix.split("://", 1)[-1]), ("matchType", "prefix"), ("output", "json"),
                   ("fl", "original,timestamp,mimetype"), ("filter", "statuscode:200"),
                   ("limit", str(page_size)), ("showResumeKey", "true")]
+        if original:
+            params.append(("filter", f"original:{original}"))
         if resume:
             params.append(("resumeKey", resume))
         body = fetch_bytes(f"{CDX_URL}?{urllib.parse.urlencode(params)}", throttle, timeout=300,

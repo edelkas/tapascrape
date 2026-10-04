@@ -89,6 +89,15 @@ FORUMER_EMOTICONS = Table("forumer_emoticons", (
     Column("code", TEXT),                     # what members typed, e.g. ":lol:"
 ), primary_key=("url",))
 
+# Members' avatars on the old board (see recover.recover_avatars).
+FORUMER_AVATARS = Table("forumer_avatars", (
+    Column("old_id", INT, nullable=False),    # -> forumer_members.old_id
+    Column("url", TEXT),                      # the avatar's original URL
+    Column("content_type", TEXT),
+    Column("data", BLOB),
+    Column("recovered_from", TEXT),           # the Wayback capture
+), primary_key=("old_id",))
+
 TABLES = (FORUMER_MEMBERS, FORUMER_TOPICS, FORUMER_POSTS, FORUMER_ATTACHMENTS, FORUMER_ARCHIVE_POSTS,
-          FORUMER_EMOTICONS)
+          FORUMER_EMOTICONS, FORUMER_AVATARS)
 register(*TABLES)

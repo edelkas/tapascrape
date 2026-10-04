@@ -124,6 +124,8 @@ Before Yuku and Tapatalk, Metanet Forums was an Invision Power Board on Forumer 
 ```sh
 tapascrape metanet import-dump forumer_wayback_machine --db sqlite:///metanet.db   # -> forumer_* tables
 tapascrape metanet link --db sqlite:///metanet.db   # old ids -> ours; stores the dump's attachment files
+tapascrape metanet attachments --db sqlite:///metanet.db   # archived act=Attach downloads (Wayback)
+tapascrape metanet avatars --db sqlite:///metanet.db       # forumer-era avatars -> forumer_avatars (Wayback)
 ```
 
 Both commands can be rerun. `import-dump` skips the dump's error, login-only and parked-domain pages. It understands the board's skins, which use different date formats.
@@ -136,6 +138,7 @@ Both commands can be rerun. `import-dump` skips the dump's error, login-only and
 | forumer_attachments | old_post_id, ref, kind, name (original file name), downloads, attachment_id, content_type, data, source_file |
 | forumer_archive_posts | topic_id, position, author, posted_on, html, post_id: the lite archive (`a/`), which has no post ids |
 | forumer_emoticons | url, code: what members typed for each smiley image |
+| forumer_avatars | old_id, url, content_type, data, recovered_from: each member's last avatar on the old board |
 
 The profile fields (birthday, location, messenger ids, which are often e-mail addresses) are personal data. Keep them out of anything published.
 
@@ -153,6 +156,20 @@ The profile fields (birthday, location, messenger ids, which are often e-mail ad
 - **Attachments.** Forumer's `act=Attach&id=N` used the post's own id. So a linked post ties its attachment box (original name, download count) to the `attachments` row of the file its source links. Files the dump has are stored there (`recovered_from = forumer-dump:<file>`).
 
 Topics the dump has but Tapatalk doesn't keep their posts in `forumer_posts` (`post_id` NULL, `forumer_topics.in_tapatalk` false).
+
+`link` also ties each `act=Attach&id=N` row of `attachments` to the upload row of post N, which is the same file. When only one of the two has the file, it copies it to the other.
+
+`metanet attachments` lists every archived `act=Attach` download, including the session-prefixed URLs (`index.php?s=…&act=Attach…`) that the generic `attachments` command can't see. For each one it fills:
+- the `act=Attach` row of that id;
+- the upload row of the post it belongs to. That is the linked post when there is one. Otherwise it is the only unlinked post in the id's time window whose upload is still missing, and only when the archived file name has the same extension (guesses that don't check out are dropped).
+
+Outcomes are recorded as `forumer-attach:<id>` in `crawl_state`. `--retry` looks again.
+
+`metanet avatars` fills `forumer_avatars` with each member's last avatar on the old board:
+- Uploaded ones (`uploads/metanet/av-<old id>.<ext>`) come from a single listing of the archived uploads. The file the dump last saw is preferred, then the latest capture.
+- Avatars linked from image hosts are looked up one by one.
+
+Images are checked to be images. Outcomes are recorded as `forumer-avatar:<old id>`.
 
 ## Login
 

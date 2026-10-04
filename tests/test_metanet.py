@@ -8,6 +8,7 @@ from tapascrape.boards.metanet.dump import archive_position, is_error, kind_of, 
 from tapascrape.boards.metanet.link import increasing, link
 from tapascrape.boards.metanet.schema import TABLES
 from tapascrape.db import open_database
+from tapascrape.net.throttle import Throttle
 
 # Trimmed from real pages of the dump (people made up).
 MEMBER_POST = """<!--Begin Msg Number 388658-->
@@ -241,3 +242,83 @@ def test_link(db):
     assert again["attachment files stored from the dump"] == 0
     assert again - Counter({"attachment files stored from the dump": 2}) == report - Counter(
         {"attachment files stored from the dump": 2})
+
+
+def _linked_board(db):
+    """A topic with linked posts 500 (post 10) and 502 (post 12); posts 11 and 13 unlinked."""
+    db.upsert_many("posts", [{"id": i, "topic_id": 50, "user_id": 1, "index": i, "timestamp": t,
+                              "content": "", "source": f"x --------------------[url=/attach/ma/post-1-{i}.{e}]"
+                                                       "Click here to view the attachment[/url]"}
+                             for i, t, e in ((10, "2007-01-01 10:00:00", "txt"), (11, "2007-01-01 11:00:00", "txt"),
+                                             (12, "2007-01-01 12:00:00", "zip"), (13, "2007-01-01 13:00:00", "zip"))])
+    db.upsert_many("attachments", [{"id": i, "kind": "upload", "name": f"post-1-{i}.{e}", "first_post_id": i,
+                                    "url": f"http://2.forumer.com/uploads/metanet/post-1-{i}.{e}"}
+                                   for i, e in ((10, "txt"), (11, "txt"), (12, "zip"), (13, "zip"))])
+    db.upsert_many("attachments", [{"id": 20, "kind": "attach-id", "old_attach_id": 500,
+                                    "url": "http://metanet.2.forumer.com/index.php?act=Attach&type=post&id=500"}])
+    db.upsert_many("forumer_posts", [{"id": i, "topic_id": 50, "post_id": p, "match": "time", "html": "h"}
+                                     for i, p in ((500, 10), (502, 12), (504, 13))])
+    db.update_many("forumer_posts", [{"id": 504, "post_id": None, "match": None}])
+
+
+def test_pair_attach_ids(db):
+    from tapascrape.boards.metanet.link import link_attachments
+    _linked_board(db)
+    db.update_many("attachments", [{"id": 20, "data": b"level", "content_type": "text/plain",
+                                    "recovered_from": "wb/1"}])
+    assert link_attachments(db)["attachment files copied between act=Attach and upload rows"] == 1
+    assert db.query("SELECT data, content_type, recovered_from FROM attachments WHERE id = 10") == [
+        (b"level", "text/plain", "wb/1")]
+    assert db.query("SELECT old_post_id, attachment_id FROM forumer_attachments") == [(500, 10)]
+
+
+def test_recover_attachments(db, monkeypatch):
+    from email.message import Message
+
+    from tapascrape.boards.metanet import recover
+    from tapascrape.net.wayback import Capture
+    _linked_board(db)
+
+    def headers(name):
+        message = Message()
+        message["x-archive-orig-content-disposition"] = f'attachment; filename="{name}"'
+        return message
+
+    files = {"1": (b"level one", headers("one.txt")), "2": (b"PK\x03\x04", headers("pack.zip")),
+             "3": (b"text", headers("notes.txt"))}
+    base = "http://metanet.2.forumer.com/index.php?s=ab&act=Attach&type=post&id="
+    monkeypatch.setattr(recover, "prefix_captures", lambda prefix, throttle, original=None: [
+        Capture(base + "500", "1", "text/plain"), Capture(base + "501", "2", "application/zip"),
+        Capture(base + "503", "3", "text/plain")])
+    monkeypatch.setattr(recover, "fetch_capture", lambda c, throttle: (*files[c.timestamp], f"wb/{c.timestamp}"))
+    report = recover.recover_attachments(db, Throttle(0))
+    # 500: linked post 10, plus its act=Attach row. 501 lies between 500 (10:00) and 502 (12:00):
+    # the only missing upload posted then is post 11's .txt, but the archive says pack.zip.
+    # 503 lies between 502 and nothing: unbounded.
+    assert report == Counter({"recovered": 1, "time-window guess not confirmed": 1, "nothing missing": 1})
+    assert db.query("SELECT id, name, recovered_from FROM attachments WHERE data IS NOT NULL ORDER BY id") == [
+        (10, "post-1-10.txt", "wb/1"), (20, "one.txt", "wb/1")]
+    files["2"] = (b"text", headers("two.txt"))
+    assert recover.recover_attachments(db, Throttle(0), retry=True)["recovered by time window"] == 1
+    assert db.query("SELECT recovered_from FROM attachments WHERE id = 11") == [("wb/2",)]
+
+
+def test_recover_avatars(db, monkeypatch):
+    from tapascrape.boards.metanet import recover
+    from tapascrape.net.wayback import ArchivedFile, Capture
+    db.upsert_many("forumer_members", [
+        {"old_id": 5, "avatar_url": "http://2.forumer.com/uploads/metanet/av-5.png"},
+        {"old_id": 6, "avatar_url": "http://img.photobucket.com/a.gif"}, {"old_id": 7, "avatar_url": None}])
+    uploads = "http://2.forumer.com:80/uploads/metanet/"
+    monkeypatch.setattr(recover, "prefix_captures", lambda prefix, throttle, original=None: [
+        Capture(uploads + "av-5.jpg", "2", "image/jpeg"), Capture(uploads + "av-5.png", "1", "image/png"),
+        Capture(uploads + "av-7.gif", "3", "image/gif")])
+    images = {"1": b"\x89PNG\r\n\x1a\nold", "2": b"\xff\xd8\xffnew", "3": b"<html>gone</html>"}
+    monkeypatch.setattr(recover, "fetch_capture", lambda c, throttle: (images[c.timestamp], None, f"wb/{c.timestamp}"))
+    monkeypatch.setattr(recover, "fetch_archived_image",
+                        lambda url, throttle: ArchivedFile(b"GIF89a", "image/gif", "wb/pb"))
+    assert recover.recover_avatars(db, Throttle(0)) == Counter({"recovered": 2, "not archived": 1})
+    # member 5: the dump's last-seen avatar (.png) wins over a later .jpg
+    assert db.query("SELECT old_id, url, content_type, recovered_from FROM forumer_avatars ORDER BY old_id") == [
+        (5, uploads + "av-5.png", "image/png", "wb/1"), (6, "http://img.photobucket.com/a.gif", "image/gif", "wb/pb")]
+    assert recover.recover_avatars(db, Throttle(0)) == Counter({"already done": 3})

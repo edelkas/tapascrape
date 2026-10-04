@@ -180,6 +180,24 @@ def _pair(olds: list[tuple], ours: list[tuple], users: dict[int, int]) -> list[t
     return pairs
 
 
+class TimeScale:
+    """Old post ids grow with time: the matched ones bound when an unmatched one was posted."""
+
+    def __init__(self, db: Database):
+        self.matched = sorted(db.query("SELECT f.id, p.timestamp FROM forumer_posts f "
+                                       "JOIN posts p ON p.id = f.post_id "
+                                       "WHERE f.match <> 'interpolated'"))
+        self.ids = [old_id for old_id, _ in self.matched]
+
+    def window(self, old_id: int) -> tuple | None:
+        """(earliest, latest) time post `old_id` can have, or None when unbounded/inconsistent."""
+        k = bisect.bisect_left(self.ids, old_id)
+        if k == 0 or k == len(self.ids):
+            return None
+        low, high = self.matched[k - 1][1], self.matched[k][1]
+        return (low, high) if low <= high else None
+
+
 def interpolate_references(db: Database) -> Counter:
     """Map the old post ids links refer to (old_post= in sentinels) that the dump lacks."""
     refs: dict[int, int] = {}
@@ -188,23 +206,17 @@ def interpolate_references(db: Database) -> Counter:
             for topic_id, old_id in OLD_POST_REF.findall(text):
                 refs[int(old_id)] = int(topic_id)
     known = dict(db.query("SELECT id, post_id FROM forumer_posts"))
-    matched = sorted(db.query("SELECT f.id, p.timestamp FROM forumer_posts f "
-                              "JOIN posts p ON p.id = f.post_id"))
+    scale = TimeScale(db)
     taken = {post_id for post_id in known.values() if post_id is not None}
-    ids = [old_id for old_id, _ in matched]
     rows, report = [], Counter()
     for old_id, topic_id in sorted(refs.items()):
         if known.get(old_id) is not None:
             report["linked post ids found directly"] += 1
             continue
-        k = bisect.bisect_left(ids, old_id)
-        if k == 0 or k == len(ids):
+        if (window := scale.window(old_id)) is None:
             report["linked post ids unresolved"] += 1
             continue
-        low, high = matched[k - 1][1], matched[k][1]
-        if low > high:  # neighbours out of time order: no window to look in
-            report["linked post ids unresolved"] += 1
-            continue
+        low, high = window
         candidates = [post_id for post_id, in db.query(
             "SELECT id FROM posts WHERE topic_id = ? AND timestamp >= ? AND timestamp <= ?",
             (topic_id, low, high)) if post_id not in taken]
@@ -256,6 +268,13 @@ def link_archive(db: Database) -> Counter:
 
 # -- attachments -----------------------------------------------------------------------------
 
+def post_upload(source: str | None, by_url: dict[str, int]) -> int | None:
+    """The attachments row of the file a migrated post was posted with (its attachment block)."""
+    if source and (block := ATTACHMENT_BLOCK.search(source)) and (found := canonical(block.group(1))):
+        return by_url.get(found.url)
+    return None
+
+
 def link_attachments(db: Database) -> Counter:
     by_url = dict(db.query("SELECT url, id FROM attachments"))
     by_attach_id = defaultdict(list)
@@ -271,9 +290,8 @@ def link_attachments(db: Database) -> Counter:
         if kind == "image":
             found = canonical(ref)
             attachment_id = by_url.get(found.url) if found else None
-        elif (source := owners.get(old_post_id)) and (block := ATTACHMENT_BLOCK.search(source)):
-            found = canonical(block.group(1))
-            attachment_id = by_url.get(found.url) if found else None
+        else:
+            attachment_id = post_upload(owners.get(old_post_id), by_url)
         updates.append({"old_post_id": old_post_id, "ref": ref, "attachment_id": attachment_id,
                         "content_type": image_type(data) if data else None})
         report["attachments tied to a file of ours" if attachment_id else "attachments not tied"] += 1
@@ -283,6 +301,7 @@ def link_attachments(db: Database) -> Counter:
                 targets.update(by_attach_id.get(int(ref), []))
             copies += [(target, data, name, source_file) for target in targets]
     db.update_many("forumer_attachments", updates)
+    report.update(pair_attach_ids(db, by_url, owners))
     stored = 0
     for attachment_id, data, name, source_file in copies:
         (row,) = db.query("SELECT data IS NULL, name FROM attachments WHERE id = ?", (attachment_id,))
@@ -297,3 +316,34 @@ def link_attachments(db: Database) -> Counter:
         stored += 1
     report["attachment files stored from the dump"] = stored
     return report
+
+
+def pair_attach_ids(db: Database, by_url: dict[str, int], owners: dict[int, str]) -> Counter:
+    """Tie act=Attach&id=N rows to the upload row of post N (the same file), and copy the file
+    between the two when only one has it."""
+    known = {(old_post_id, ref) for old_post_id, ref in db.query(
+        "SELECT old_post_id, ref FROM forumer_attachments")}
+    rows, copied = [], 0
+    for attach_row, old_attach_id, data, mime, source in db.query(
+            "SELECT id, old_attach_id, data, content_type, recovered_from FROM attachments "
+            "WHERE kind = 'attach-id' AND old_attach_id IS NOT NULL"):
+        upload = post_upload(owners.get(old_attach_id), by_url)
+        if upload is None:
+            continue
+        if (old_attach_id, str(old_attach_id)) not in known:
+            rows.append({"old_post_id": old_attach_id, "ref": str(old_attach_id), "kind": "file",
+                         "attachment_id": upload})
+        (upload_data, upload_mime, upload_source), = db.query(
+            "SELECT data, content_type, recovered_from FROM attachments WHERE id = ?", (upload,))
+        if (data is None) == (upload_data is None):
+            continue
+        if upload_data is None:
+            target, file, file_mime, origin = upload, data, mime, source
+        else:
+            target, file, file_mime, origin = attach_row, upload_data, upload_mime, upload_source
+        db.update_many("attachments", [{"id": target, "data": file, "size": len(file),
+                                        "content_type": file_mime, "recovered_from": origin}])
+        db.delete_state(f"{MISSING_PREFIX}{target}")
+        copied += 1
+    db.upsert_many("forumer_attachments", rows)
+    return Counter({"attachment files copied between act=Attach and upload rows": copied})
