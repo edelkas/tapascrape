@@ -7,3 +7,4 @@ __pycache__/
 cookies*.txt
 .venv/
 *.stackdump
+forumer_wayback_machine

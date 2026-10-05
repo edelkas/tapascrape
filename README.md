@@ -31,6 +31,7 @@ tapascrape smilies --db sqlite:///metanet.db   # smiley images -> smilies table 
 tapascrape fix --db sqlite:///metanet.db       # also lists attachments in the attachments table
 tapascrape attachments --db sqlite:///metanet.db   # recover attachment files (Wayback)
 tapascrape scan --db sqlite:///metanet.db --fixed   # what's left
+tapascrape quotes --db sqlite:///metanet.db   # the posts quotes quote -> quotes table
 
 # HTML pass: rank, signature, group names; recovers posts the API can't return.
 tapascrape enrich metanetfr --db sqlite:///metanet.db
@@ -59,6 +60,7 @@ All IDs are the board's own IDs. Datetimes are UTC. `posts.content` and `users.s
 | group_users | group_id, user_id |
 | smilies | id, url, name, host, uses, content_type, data, recovered_from |
 | attachments | id, kind, url, name, old_forum_id, uploaded_at, old_attach_id, first_post_id, uses, content_type, size, data, recovered_from |
+| quotes | post_id, position, level, parent_position, author, date, quoted_post_id, quoted_user_id, match, similarity, tz_offset |
 | crawl_state | key, value |
 
 `finalize` computes these columns:
@@ -115,6 +117,36 @@ Sentinels are never written inside `[code]` blocks, nor in a post whose source a
 
 `fix` also processes signatures. Only their website HTML is available, so `users.signature_source` is BBCode rebuilt from it (the same way as `recover-sources`, with images Tapatalk serves through its `imageproxy.php` given their original URL back). `users.signature_fixed` is that BBCode with the same fixes applied.
 
+## Quotes
+
+`quotes` finds the post each `[quote]` quotes, so links can point at it. Run it after `fix`, since it reads `source_fixed`, falling back to `source` and then to the HTML rebuilt as BBCode. Each run rebuilds the whole `quotes` table.
+
+Every quote gets a row, nested ones included. `position` is the 0-based order of its opening tag in the post's text, outside `[code]` blocks. `level` is 1 for a quote written in the post itself and 2 for a quote inside it. `parent_position` gives the enclosing quote, so the tree can be rebuilt. `author` and `date` are as the tag wrote them. The tag can be `[quote="name" date="..."]`, `[quote=name @ date]`, `[quote=name,date]` or `(name @ date)`, including the Invision variants that lost the month (`name @  25, 2007 03:11 pm`). Explicit ids are used directly when the tag has them: Tapatalk's `uid=`, XenForo's `post: N, member: N`, or `post=`/`timestamp=`.
+
+A quote is matched against earlier posts on three kinds of evidence:
+
+- **Author.** The name is the post author's, exactly or nearly (a typo or a prefix).
+- **Date.** Boards showed dates in the reader's timezone, so the quote's date is the post's UTC time shifted by a real timezone offset (whole or half hours, or the :45 zones, between −12 h and +14 h) and cut to the minute. Each quoter's usual offset is learned from the clear-cut matches and breaks ties. `tz_offset` keeps the offset found.
+- **Text.** The share of the quote's word trigrams found in the post's own text, leaving out its own quotes (`similarity`, in %). Along with the author or the date, it finds quoted posts in any topic.
+
+`match` says what agreed:
+
+| match | evidence |
+|---|---|
+| post-id | the tag's own post id |
+| author+date | the author's post at that time |
+| date+text | the date, plus the text (renamed or unknown author) |
+| author+text | the author, plus the text (undated quote) |
+| near-author+date | an almost-matching name at that time |
+| text | at least 80% of the text alone, in the same topic (elsewhere, the same text is as likely quoted from where both took it) |
+| date | the topic's only post at that time, for a quote naming no known member and too short to compare |
+| author | the author's latest earlier post in the topic, for an undated quote too short to compare |
+| ambiguous | several equally good candidates; `quoted_post_id` stays NULL |
+
+Unmatched quotes keep `match` NULL. `quoted_user_id` is still set when the name belongs to a single member.
+
+Author and date alone aren't enough when the quote is long enough to compare and its text isn't in the post. The exception is a post in the same topic at the quoter's usual offset, since posts get edited. The quoted post must be older than the quoting post. For a nested quote, it must be older than the post the enclosing quote matched, and that post's author is whose timezone applies.
+
 ## Metanet: the Forumer era
 
 Board-specific extras live under `tapascrape/boards/` and the `metanet` command group. The general commands never load them.
@@ -126,6 +158,7 @@ tapascrape metanet import-dump forumer_wayback_machine --db sqlite:///metanet.db
 tapascrape metanet link --db sqlite:///metanet.db   # old ids -> ours; stores the dump's attachment files
 tapascrape metanet attachments --db sqlite:///metanet.db   # archived act=Attach downloads (Wayback)
 tapascrape metanet avatars --db sqlite:///metanet.db       # forumer-era avatars -> forumer_avatars (Wayback)
+tapascrape metanet quotes --db sqlite:///metanet.db        # `quotes`, also knowing forumer-era names
 ```
 
 Both commands can be rerun. `import-dump` skips the dump's error, login-only and parked-domain pages. It understands the board's skins, which use different date formats.
@@ -170,6 +203,8 @@ Outcomes are recorded as `forumer-attach:<id>` in `crawl_state`. `--retry` looks
 - Avatars linked from image hosts are looked up one by one.
 
 Images are checked to be images. Outcomes are recorded as `forumer-avatar:<old id>`.
+
+`metanet quotes` runs the general `quotes` matching with more names: each member's forumer name, and the author forumer showed on each linked post, guests included. Quotes name people as they were called at the time, and some accounts are known to Tapatalk only by their id, so use it instead of `quotes` on this board.
 
 ## Login
 

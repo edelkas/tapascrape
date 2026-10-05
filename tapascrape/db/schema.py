@@ -141,13 +141,29 @@ ATTACHMENTS = Table("attachments", (
     Column("recovered_from", TEXT),        # where `data` came from (e.g. a Wayback capture)
 ), primary_key=("id",), renamed=(("old_member_id", "old_forum_id"),))
 
+# The [quote]s of posts and the posts they quote (see content.quotes), nested ones included.
+# Rebuilt as a whole by the `quotes` command.
+QUOTES = Table("quotes", (
+    Column("post_id", INT, nullable=False),   # the post the quote is in
+    Column("position", INT, nullable=False),  # 0-based, its opening tag's order in the post's text
+    Column("level", INT, nullable=False),     # 1: in the post itself, 2: inside a level-1 quote...
+    Column("parent_position", INT),           # the enclosing quote (level > 1)
+    Column("author", TEXT),                   # as the tag says
+    Column("date", TEXT),                     # as the tag says
+    Column("quoted_post_id", INT),            # -> posts.id; NULL when not found
+    Column("quoted_user_id", INT),            # its author (or the one the name points at)
+    Column("match", TEXT),                    # what agreed, e.g. "author+date"; "ambiguous"
+    Column("similarity", INT),                # % of the quote's text found in the quoted post
+    Column("tz_offset", INT),                 # minutes the quote's date is off the post's UTC time
+), primary_key=("post_id", "position"), indexes=(Index("ix_quotes_quoted", ("quoted_post_id",)),))
+
 # Bookkeeping for resumable crawls (e.g. "topic:6364" -> "done").
 CRAWL_STATE = Table("crawl_state", (
     Column("key", TEXT, nullable=False),
     Column("value", TEXT),
 ), primary_key=("key",))
 
-TABLES = (FORUMS, TOPICS, POSTS, USERS, AVATARS, GROUPS, GROUP_USERS, SMILIES, ATTACHMENTS,
+TABLES = (FORUMS, TOPICS, POSTS, USERS, AVATARS, GROUPS, GROUP_USERS, SMILIES, ATTACHMENTS, QUOTES,
           CRAWL_STATE)
 TABLES_BY_NAME = {t.name: t for t in TABLES}
 

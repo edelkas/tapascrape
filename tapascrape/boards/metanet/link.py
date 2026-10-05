@@ -235,7 +235,7 @@ def interpolate_references(db: Database) -> Counter:
 
 def link_archive(db: Database) -> Counter:
     """Tie lite-archive posts (author + day, no ids) to ours: same topic, day and author name,
-    or else the same position."""
+    or else the same position, for posts with no known author."""
     names = dict(db.query("SELECT id, name FROM users"))
     restored = dict(db.query("SELECT user_id, name FROM forumer_members WHERE user_id IS NOT NULL"))
     guests = dict(db.query("SELECT post_id, author FROM forumer_posts WHERE post_id IS NOT NULL"))
@@ -255,7 +255,14 @@ def link_archive(db: Database) -> Counter:
             same_day = [p for p in by_day.get(str(day)[:10], []) if p[0] not in taken]
             named = [p for p in same_day if author in (names.get(p[1]), restored.get(p[1]),
                                                        guests.get(p[0]))]
-            placed = [p for p in same_day if p[2] == position + 1]
+            # By position only when the post's author is unknown (a nameless guest post):
+            # positions shift wherever Tapatalk lost a post.
+            placed = [p for p in same_day if p[2] == position + 1
+                      and not (names.get(p[1]) if p[1] else guests.get(p[0]))]
+            if len(named) > 1:  # the author's posts of the day: the one nearest the position
+                distance = {p[0]: abs(p[2] - position - 1) for p in named}
+                nearest = min(distance.values())
+                named = [p for p in named if distance[p[0]] == nearest]
             pick = named if len(named) == 1 else placed if len(placed) == 1 else []
             if pick:
                 taken.add(pick[0][0])

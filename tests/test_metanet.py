@@ -322,3 +322,19 @@ def test_recover_avatars(db, monkeypatch):
     assert db.query("SELECT old_id, url, content_type, recovered_from FROM forumer_avatars ORDER BY old_id") == [
         (5, uploads + "av-5.png", "image/png", "wb/1"), (6, "http://img.photobucket.com/a.gif", "image/gif", "wb/pb")]
     assert recover.recover_avatars(db, Throttle(0)) == Counter({"already done": 3})
+
+
+def test_link_archive_positions(db):
+    from tapascrape.boards.metanet.link import link_archive
+
+    db.upsert_many("users", [{"id": 1, "name": "astro"}, {"id": 2, "name": "maestro"}])
+    db.upsert_many("posts", [{"id": i, "topic_id": 50, "user_id": u, "index": i, "timestamp": "2005-09-06 10:00:00",
+                              "content": "", "source": "x"} for i, u in ((1, 1), (2, 1), (3, 0))])
+    db.upsert_many("forumer_archive_posts", [{"topic_id": 50, "position": p, "author": a,
+                                              "posted_on": "2005-09-06 00:00:00", "html": "h"}
+                                             for p, a in ((0, "astro"), (1, "maestro"), (2, "visitor"))])
+    link_archive(db)
+    # astro's two posts of the day: the one at the position; position 1 is astro's post too, not
+    # maestro's, whatever its position; position 2 is a nameless guest's
+    assert db.query("SELECT position, post_id FROM forumer_archive_posts ORDER BY position") == [
+        (0, 1), (1, None), (2, 3)]

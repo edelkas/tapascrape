@@ -9,6 +9,7 @@ from tapascrape.config import BoardConfig
 from tapascrape.content.attachments import collect_attachments, recover_attachments
 from tapascrape.content.fix import (FIXES, FIXES_BY_NAME, fix_posts, fix_signatures, fix_source,
                                    load_context)
+from tapascrape.content.quotes import link_quotes
 from tapascrape.content.scan import RULES_BY_NAME, matching_posts, print_report, scan
 from tapascrape.content.smilies import (collect_smilies, pending_smilies, recover_smilies,
                                         tapatalk_board, tapatalk_fetcher)
@@ -281,6 +282,14 @@ def cmd_avatars(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_quotes(args: argparse.Namespace) -> int:
+    with open_database(args.db) as db:
+        db.create_schema()
+        report = link_quotes(db)
+    print_report_counts(report)
+    return 0
+
+
 def cmd_metanet_import(args: argparse.Namespace) -> int:
     from pathlib import Path
 
@@ -319,6 +328,16 @@ def cmd_metanet_avatars(args: argparse.Namespace) -> int:
     with open_database(args.db) as db:
         db.create_schema()
         report = recover_avatars(db, Throttle(args.rate), retry=args.retry)
+    print_report_counts(report)
+    return 0
+
+
+def cmd_metanet_quotes(args: argparse.Namespace) -> int:
+    from tapascrape.boards.metanet.quotes import link_metanet_quotes
+
+    with open_database(args.db) as db:
+        db.create_schema()
+        report = link_metanet_quotes(db)
     print_report_counts(report)
     return 0
 
@@ -489,6 +508,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--redo", action="store_true", help="check avatars already re-downloaded again")
     p.set_defaults(func=cmd_avatars)
 
+    p = sub.add_parser("quotes", help="find the posts that quotes quote (author, date and text) "
+                                      "and rebuild the quotes table; run after fix")
+    p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
+    p.set_defaults(func=cmd_quotes)
+
     p = sub.add_parser("metanet", help="Metanet Forums only: data from the board's Forumer era "
                                        "(a 2019 Wayback Machine dump of metanet.2.forumer.com)")
     metanet = p.add_subparsers(dest="metanet_command", required=True)
@@ -500,6 +524,10 @@ def build_parser() -> argparse.ArgumentParser:
                                         "store the attachment files it has")
     p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
     p.set_defaults(func=cmd_metanet_link)
+    p = metanet.add_parser("quotes", help="`quotes`, also knowing the names members and guests had "
+                                          "on forumer; run after link")
+    p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
+    p.set_defaults(func=cmd_metanet_quotes)
     for name, func, help, retry in (
             ("attachments", cmd_metanet_attachments,
              "recover attachments from forumer's archived act=Attach downloads (Wayback Machine); "
