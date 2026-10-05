@@ -70,7 +70,8 @@ def test_wayback_skips_captures_that_are_not_images(monkeypatch):
         "2006": GIF,
     }
 
-    def fake_fetch(url, throttle, timeout=30.0, max_retries=3):
+    def fake_fetch(url, throttle, timeout=30.0, max_retries=3, user_agent=None):
+        assert user_agent == wayback.USER_AGENT  # a browser's gets blocked as a bot
         if url.startswith(wayback.CDX_URL):
             assert "filter=mimetype%3Aimage%2F.%2A" in url
             return json.dumps(cdx).encode()

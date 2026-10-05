@@ -2,6 +2,7 @@
 
 import http.client
 import logging
+import re
 import urllib.error
 import urllib.request
 import uuid
@@ -25,6 +26,16 @@ def retry_after(value: str | None) -> float | None:
         return None
 
 
+def _reason(error: urllib.error.HTTPError) -> str:
+    """The start of an error page's text, which tells a block from a rate limit."""
+    try:
+        body = error.read(400).decode("utf-8", "replace")
+    except (OSError, http.client.HTTPException):
+        return ""
+    text = " ".join(re.sub(r"<[^>]*>", " ", body).split())
+    return f": {text[:150]}" if text and not body.lstrip().startswith("<!") else ""
+
+
 def cache_busted(url: str) -> str:
     """`url` with a unique query parameter, so a CDN cache can't answer it.
 
@@ -35,23 +46,24 @@ def cache_busted(url: str) -> str:
 
 
 def fetch_bytes(url: str, throttle: Throttle, timeout: float = 30.0,
-                max_retries: int = 3, original: bool = False) -> bytes | None:
+                max_retries: int = 3, original: bool = False,
+                user_agent: str = USER_AGENT) -> bytes | None:
     """GET `url`; None if it doesn't exist (4xx).
 
     `original`: for images behind Cloudflare: bypass its cache and refuse a
     polished answer, so the file is stored as it was uploaded.
     """
-    found = fetch(url, throttle, timeout, max_retries, original)
+    found = fetch(url, throttle, timeout, max_retries, original, user_agent)
     return found[0] if found is not None else None
 
 
 def fetch(url: str, throttle: Throttle, timeout: float = 30.0, max_retries: int = 3,
-          original: bool = False) -> tuple[bytes, Message] | None:
+          original: bool = False, user_agent: str = USER_AGENT) -> tuple[bytes, Message] | None:
     """Like fetch_bytes, with the response headers."""
     def attempt() -> tuple[bytes, Message] | None:
         target = cache_busted(url) if original else url
         log.debug("GET %s", target)
-        headers = {"User-Agent": USER_AGENT}
+        headers = {"User-Agent": user_agent}
         if original:
             headers["Accept"] = ORIGINAL_IMAGES
         request = urllib.request.Request(target, headers=headers)
@@ -63,7 +75,8 @@ def fetch(url: str, throttle: Throttle, timeout: float = 30.0, max_retries: int 
                 return response.read(), response.headers
         except urllib.error.HTTPError as e:
             if e.code == 429 or e.code >= 500:
-                raise RetryableError(f"HTTP {e.code}", retry_after(e.headers.get("Retry-After"))) from e
+                raise RetryableError(f"HTTP {e.code}{_reason(e)}",
+                                     retry_after(e.headers.get("Retry-After"))) from e
             return None
         except (OSError, http.client.HTTPException) as e:
             raise RetryableError(repr(e)) from e

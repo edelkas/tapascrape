@@ -14,6 +14,9 @@ log = logging.getLogger(__name__)
 CDX_URL = "https://web.archive.org/cdx/search/cdx"
 # archive.org rate-limits hard (HTTP 429); back off for up to a few minutes.
 MAX_RETRIES = 7
+# An honest User-Agent. archive.org answers a browser's User-Agent sent with Python's
+# TLS fingerprint with 429 "suspected abusive bot traffic", every time.
+USER_AGENT = "tapascrape (forum archiver; Python-urllib)"
 # Characters kept as they are when building the raw-snapshot URL.
 URL_SAFE = ":/?&=%;()!,.~-_+@*'$"
 
@@ -48,7 +51,8 @@ def snapshots(url: str, throttle: Throttle, limit: int = 5) -> list[tuple[str, s
         ("url", target), ("output", "json"), ("fl", "timestamp,original"),
         ("filter", "statuscode:200"), ("filter", "mimetype:image/.*"), ("limit", str(limit)),
     ])
-    body = fetch_bytes(f"{CDX_URL}?{query}", throttle, timeout=120, max_retries=MAX_RETRIES)
+    body = fetch_bytes(f"{CDX_URL}?{query}", throttle, timeout=120, max_retries=MAX_RETRIES,
+                           user_agent=USER_AGENT)
     if not body:
         return []
     rows = json.loads(body) if body.strip() else []
@@ -60,7 +64,8 @@ def fetch_archived_image(url: str, throttle: Throttle) -> ArchivedFile | None:
     for timestamp, original in snapshots(url, throttle):
         # "id_" asks for the file as it was captured, without the Wayback toolbar.
         archived = f"https://web.archive.org/web/{timestamp}id_/{urllib.parse.quote(original, safe=URL_SAFE)}"
-        data = fetch_bytes(archived, throttle, timeout=60, max_retries=MAX_RETRIES)
+        data = fetch_bytes(archived, throttle, timeout=60, max_retries=MAX_RETRIES,
+                           user_agent=USER_AGENT)
         if data and (mime := image_type(data)):
             return ArchivedFile(data, mime, archived)
         log.debug("%s: capture %s is not an image", url, timestamp)
@@ -92,7 +97,7 @@ def prefix_captures(prefix: str, throttle: Throttle, page_size: int = 50000,
         if resume:
             params.append(("resumeKey", resume))
         body = fetch_bytes(f"{CDX_URL}?{urllib.parse.urlencode(params)}", throttle, timeout=300,
-                           max_retries=MAX_RETRIES)
+                           max_retries=MAX_RETRIES, user_agent=USER_AGENT)
         rows = json.loads(body) if body and body.strip() else []
         resume = None
         if len(rows) >= 2 and len(rows[-1]) == 1:  # [..., [], [resume key]]
@@ -110,5 +115,5 @@ def fetch_capture(capture: Capture, throttle: Throttle) -> tuple[bytes, Message,
     """
     archived = (f"https://web.archive.org/web/{capture.timestamp}id_/"
                 f"{urllib.parse.quote(capture.original, safe=URL_SAFE)}")
-    found = fetch(archived, throttle, timeout=120, max_retries=MAX_RETRIES)
+    found = fetch(archived, throttle, timeout=120, max_retries=MAX_RETRIES, user_agent=USER_AGENT)
     return (found[0], found[1], archived) if found is not None else None
