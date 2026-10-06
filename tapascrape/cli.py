@@ -290,6 +290,18 @@ def cmd_quotes(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_site(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from tapascrape.site.build import build_site
+
+    with open_database(args.db) as db:
+        db.create_schema()
+        counts = build_site(db, Path(args.out), args.title)
+    print(f"wrote {args.out}: " + ", ".join(f"{n:,} {what}" for what, n in counts.items()))
+    return 0
+
+
 def cmd_metanet_import(args: argparse.Namespace) -> int:
     from pathlib import Path
 
@@ -512,6 +524,13 @@ def build_parser() -> argparse.ArgumentParser:
                                       "and rebuild the quotes table; run after fix")
     p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
     p.set_defaults(func=cmd_quotes)
+
+    p = sub.add_parser("site", help="write a static HTML site to browse the board (one page per "
+                                    "forum, topic and user); run after fix and quotes")
+    p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
+    p.add_argument("--out", required=True, metavar="DIR", help="folder to write it to")
+    p.add_argument("--title", default="Forum", help="the board's name, atop every page")
+    p.set_defaults(func=cmd_site)
 
     p = sub.add_parser("metanet", help="Metanet Forums only: data from the board's Forumer era "
                                        "(a 2019 Wayback Machine dump of metanet.2.forumer.com)")

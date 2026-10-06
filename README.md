@@ -32,6 +32,7 @@ tapascrape fix --db sqlite:///metanet.db       # also lists attachments in the a
 tapascrape attachments --db sqlite:///metanet.db   # recover attachment files (Wayback)
 tapascrape scan --db sqlite:///metanet.db --fixed   # what's left
 tapascrape quotes --db sqlite:///metanet.db   # the posts quotes quote -> quotes table
+tapascrape site --db sqlite:///metanet.db --out site --title "Metanet Forums"   # static HTML site
 
 # HTML pass: rank, signature, group names; recovers posts the API can't return.
 tapascrape enrich metanetfr --db sqlite:///metanet.db
@@ -146,6 +147,32 @@ A quote is matched against earlier posts on three kinds of evidence:
 Unmatched quotes keep `match` NULL. `quoted_user_id` is still set when the name belongs to a single member.
 
 Author and date alone aren't enough when the quote is long enough to compare and its text isn't in the post. The exception is a post in the same topic at the quoter's usual offset, since posts get edited. The quoted post must be older than the quoting post. For a nested quote, it must be older than the post the enclosing quote matched, and that post's author is whose timezone applies.
+
+## Static site
+
+`site` writes a static HTML site to browse the board. It's plain HTML and CSS, with no JavaScript, so it can be opened from disk or served by any web server. Every style is in `style.css`, which can be edited by hand.
+
+| page | what |
+|---|---|
+| `index.html` | the forum tree |
+| `f/<id>.html` | a forum: its subforum tree, then its topics |
+| `t/<id>.html` | a topic: every post, oldest first, each anchored as `#p<post id>` |
+| `u/<id>.html` | a user: avatar, name, join and last-active times, post count, first and last post, signature |
+| `files/` | the smileys, attachments and avatars stored in the database |
+
+There's one page per forum, topic and user, with no pagination. Every page starts with the board's name (`--title`) and the breadcrumbs down to it.
+
+- **Forum tables.** A forum's subforums are shown as a tree, nested levels indented. Each level is sorted by latest post: the forum's own, or a subforum's, whichever is newer. Each row shows the forum's own topic, post and view counts and its own last post.
+- **Topic tables.** Topics are sorted by last post, with stickies first. The flags column shows `S` for a sticky and `L` for a locked topic.
+- **Times.** All times are UTC, in ISO 8601.
+
+Everything is plain text except post bodies and signatures, which are rendered from their BBCode (`source_fixed`, else `source`, else the API's HTML turned back into BBCode).
+
+- **Markup.** Only tags the board renders become HTML. Malformed markup degrades as it did on the board: unknown, unclosed or unmatched tags stay as text. Bare URLs become links. Only `http`, `https`, `ftp` and `mailto` links are kept. Colors, sizes and fonts are the only inline styles.
+- **Sentinels.** `[ts:smiley]` and `[ts:attachment...]` point at the files in `files/`. Ones never recovered show as lost. `[ts:topic]` and `[ts:forum]` become links to their pages.
+- **Quotes.** A quote's heading links to the post it quotes, when `quotes` found it.
+
+Rerunning `site` overwrites the pages but doesn't delete anything, so it's safe to rebuild into the same folder.
 
 ## Metanet: the Forumer era
 

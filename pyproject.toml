@@ -24,3 +24,6 @@ tapascrape = "tapascrape.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["tapascrape*"]
+
+[tool.setuptools.package-data]
+"tapascrape.site" = ["*.css"]
