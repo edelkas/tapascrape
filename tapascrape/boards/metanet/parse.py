@@ -305,3 +305,36 @@ def emoticons(page: str) -> list[tuple[str, str]]:
     pairs = re.findall(r"add_smilie\(\"(.*?)\"\)'><img src='([^']+)'", page)
     pairs += re.findall(r"<!--emo&(.*?)--><img src='([^']+)'", page)
     return [(html.unescape(code), html.unescape(url)) for code, url in pairs]
+
+
+# -- forums ------------------------------------------------------------------------------------
+
+NAVSTRIP = re.compile(r"id='navstrip'(.*?)<!--TEMPLATE: skin_global, Template Part: end_nav-->", re.S)
+NAV_LINK = re.compile(r"""<a href=['"][^'"]*?(?:act=SC&(?:amp;)?c=(\d+)|showforum=(\d+))['"]>(.*?)</a>""", re.S)
+FORUM_ROW = re.compile(r"""<b><a href=['"][^'"]*?showforum=(\d+)['"]>([^<]*)</a></b>\s*<br />\s*"""
+                       r"""<span class='desc'>(.*?)</span>""", re.S)
+
+
+def nav_forums(page: str) -> tuple[str | None, list[tuple[int, str]]]:
+    """(category, [(forum id, name)...] outermost first) from a page's navigation strip."""
+    strip = NAVSTRIP.search(page)
+    if strip is None:
+        return None, []
+    category, forums = None, []
+    for category_id, forum_id, name in NAV_LINK.findall(strip.group(1)):
+        if category_id:
+            category = text(name)
+        elif (name := text(name)) is not None:
+            forums.append((int(forum_id), name))
+    return category, forums
+
+
+def forum_rows(page: str) -> list[tuple[int, str, str | None]]:
+    """(forum id, name, description) of the forums a board, category or forum page lists.
+
+    Descriptions end where a list of subforums begins (after a blank line)."""
+    rows = []
+    for forum_id, name, description in FORUM_ROW.findall(page):
+        description = re.split(r"(?:<br />\s*){2,}|Forum Led by:", description)[0]
+        rows.append((int(forum_id), text(name), text(description)))
+    return rows

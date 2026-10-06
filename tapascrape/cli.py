@@ -354,6 +354,18 @@ def cmd_metanet_quotes(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_metanet_site(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from tapascrape.boards.metanet.site import build_metanet_site
+
+    with open_database(args.db) as db:
+        db.create_schema()
+        counts = build_metanet_site(db, Path(args.out), args.title)
+    print(f"wrote {args.out}: " + ", ".join(f"{n:,} {what}" for what, n in counts.items()))
+    return 0
+
+
 def print_report_counts(report) -> None:
     width = max(map(len, report), default=0)
     for key in sorted(report):
@@ -547,6 +559,12 @@ def build_parser() -> argparse.ArgumentParser:
                                           "on forumer; run after link")
     p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
     p.set_defaults(func=cmd_metanet_quotes)
+    p = metanet.add_parser("site", help="`site`, with the forums, topics, posts, members and profile "
+                                        "details only the forumer dump has; run after link and quotes")
+    p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
+    p.add_argument("--out", required=True, metavar="DIR", help="folder to write it to")
+    p.add_argument("--title", default="Metanet Forums", help="the board's name, atop every page")
+    p.set_defaults(func=cmd_metanet_site)
     for name, func, help, retry in (
             ("attachments", cmd_metanet_attachments,
              "recover attachments from forumer's archived act=Attach downloads (Wayback Machine); "

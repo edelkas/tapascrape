@@ -30,6 +30,22 @@ class Collected:
         self.attachments: dict[tuple[int, str], dict] = {}
         self.archive: dict[tuple[int, int], dict] = {}
         self.emoticons: dict[str, str] = {}
+        self.forums: dict[int, dict] = {}
+
+    def add_forums(self, page: str) -> None:
+        """Forums named by a page's navigation strip (with their parents) and forum listings."""
+        category, chain = parse.nav_forums(page)
+        for i, (forum_id, name) in enumerate(chain):
+            forum = self.forums.setdefault(forum_id, {"id": forum_id})
+            forum["name"] = name
+            forum["parent_id"] = chain[i - 1][0] if i else None
+            if not i and category:
+                forum["category"] = category
+        for forum_id, name, description in parse.forum_rows(page):
+            forum = self.forums.setdefault(forum_id, {"id": forum_id})
+            forum.setdefault("name", name)
+            if description:
+                forum.setdefault("description", description)
 
     def member(self, old_id: int) -> dict:
         return self.members.setdefault(old_id, {"old_id": old_id})
@@ -117,6 +133,7 @@ def collect(root: Path, report: Counter) -> Collected:
             continue
         for code, url in parse.emoticons(page):
             found.emoticons.setdefault(url, code)
+        found.add_forums(page)
         if file.kind == "profile":
             if (profile := parse.profile(page)) is not None:
                 found.add_profile(profile)
@@ -173,6 +190,10 @@ def import_dump(db: Database, root: Path) -> Counter:
                "description": t.get("description"), "started_at": t.get("started_at"),
                "pinned": bool(t.get("pinned")), "poll": t.get("poll"),
                "in_tapatalk": t["id"] in known_topics} for t in found.topics.values()]
+    known_forums = {forum_id for forum_id, in db.query("SELECT id FROM forums")}
+    forums = [{"id": f["id"], "name": f.get("name"), "description": f.get("description"),
+               "parent_id": f.get("parent_id"), "category": f.get("category"),
+               "in_tapatalk": f["id"] in known_forums} for f in found.forums.values()]
     member_columns = [c.name for c in TABLES[0].columns if c.name not in ("user_id", "match")]
     members = [{c: m.get(c) for c in member_columns} for m in found.members.values()]
     attachment_columns = ("old_post_id", "ref", "kind", "name", "downloads", "data", "source_file")
@@ -180,6 +201,7 @@ def import_dump(db: Database, root: Path) -> Counter:
     with db.transaction():
         # Batches keep each upsert's column set uniform (upsert_many writes the first row's).
         db.upsert_many("forumer_members", members)
+        db.upsert_many("forumer_forums", forums)
         db.upsert_many("forumer_topics", topics)
         for start in range(0, len(posts), 5000):
             db.upsert_many("forumer_posts", posts[start:start + 5000])
@@ -193,6 +215,8 @@ def import_dump(db: Database, root: Path) -> Counter:
                                            or m.get("location") or m.get("interests")),
         "posts": len(posts),
         "posts by guests": sum(1 for p in posts if p["member_id"] is None),
+        "forums": len(forums),
+        "forums missing from Tapatalk": sum(1 for f in forums if not f["in_tapatalk"]),
         "topics": len(topics),
         "topics with posts missing from Tapatalk": len(
             ({p["topic_id"] for p in posts} | {topic_id for topic_id, _ in found.archive}) - known_topics),

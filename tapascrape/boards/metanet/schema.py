@@ -33,6 +33,15 @@ FORUMER_MEMBERS = Table("forumer_members", (
     Column("integrity", TEXT),
 ), primary_key=("old_id",), indexes=(Index("ix_forumer_members_user", ("user_id",)),))
 
+FORUMER_FORUMS = Table("forumer_forums", (
+    Column("id", INT, nullable=False),      # forum ids survived the migrations: = forums.id
+    Column("name", TEXT),
+    Column("description", TEXT),
+    Column("parent_id", INT),               # the forum it's in; NULL: right in its category
+    Column("category", TEXT),               # forumer's category (Tapatalk made them forums)
+    Column("in_tapatalk", BOOL),            # whether `forums` has it
+), primary_key=("id",))
+
 FORUMER_TOPICS = Table("forumer_topics", (
     Column("id", INT, nullable=False),      # topic ids survived the migrations: = topics.id
     Column("forum_id", INT),
@@ -98,6 +107,6 @@ FORUMER_AVATARS = Table("forumer_avatars", (
     Column("recovered_from", TEXT),           # the Wayback capture
 ), primary_key=("old_id",))
 
-TABLES = (FORUMER_MEMBERS, FORUMER_TOPICS, FORUMER_POSTS, FORUMER_ATTACHMENTS, FORUMER_ARCHIVE_POSTS,
+TABLES = (FORUMER_MEMBERS, FORUMER_FORUMS, FORUMER_TOPICS, FORUMER_POSTS, FORUMER_ATTACHMENTS, FORUMER_ARCHIVE_POSTS,
           FORUMER_EMOTICONS, FORUMER_AVATARS)
 register(*TABLES)

@@ -157,7 +157,7 @@ Author and date alone aren't enough when the quote is long enough to compare and
 | `index.html` | the forum tree |
 | `f/<id>.html` | a forum: its subforum tree, then its topics |
 | `t/<id>.html` | a topic: every post, oldest first, each anchored as `#p<post id>` |
-| `u/<id>.html` | a user: avatar, name, join and last-active times, post count, first and last post, signature |
+| `u/<id>.html` | a user: avatar, id, name, rank, groups, join and last-active times, post count, first and last post, signature (empty fields are left out) |
 | `files/` | the smileys, attachments and avatars stored in the database |
 
 There's one page per forum, topic and user, with no pagination. Every page starts with the board's name (`--title`) and the breadcrumbs down to it.
@@ -186,6 +186,7 @@ tapascrape metanet link --db sqlite:///metanet.db   # old ids -> ours; stores th
 tapascrape metanet attachments --db sqlite:///metanet.db   # archived act=Attach downloads (Wayback)
 tapascrape metanet avatars --db sqlite:///metanet.db       # forumer-era avatars -> forumer_avatars (Wayback)
 tapascrape metanet quotes --db sqlite:///metanet.db        # `quotes`, also knowing forumer-era names
+tapascrape metanet site --db sqlite:///metanet.db --out site   # `site`, with what only the dump has
 ```
 
 Both commands can be rerun. `import-dump` skips the dump's error, login-only and parked-domain pages. It understands the board's skins, which use different date formats.
@@ -194,6 +195,7 @@ Both commands can be rerun. `import-dump` skips the dump's error, login-only and
 |---|---|
 | forumer_members | old_id, name, user_id, match, group_name, title, joined_at, post_count, avatar_url, country, signature, birthday, location, specific_location, interests, website, msn, aim, yahoo, icq, integrity |
 | forumer_posts | id (old post id), topic_id, forum_id, post_id, match, member_id, author, posted, posted_at, html, edited_by, edited_at, source_file |
+| forumer_forums | id, name, description, parent_id, category, in_tapatalk: forums named by the pages' navigation and forum listings |
 | forumer_topics | id, forum_id, title, description, started_at, pinned, poll (JSON with vote counts), in_tapatalk |
 | forumer_attachments | old_post_id, ref, kind, name (original file name), downloads, attachment_id, content_type, data, source_file |
 | forumer_archive_posts | topic_id, position, author, posted_on, html, post_id: the lite archive (`a/`), which has no post ids |
@@ -232,6 +234,16 @@ Outcomes are recorded as `forumer-attach:<id>` in `crawl_state`. `--retry` looks
 Images are checked to be images. Outcomes are recorded as `forumer-avatar:<old id>`.
 
 `metanet quotes` runs the general `quotes` matching with more names: each member's forumer name, and the author forumer showed on each linked post, guests included. Quotes name people as they were called at the time, and some accounts are known to Tapatalk only by their id, so use it instead of `quotes` on this board.
+
+`metanet site` builds the general static site, plus what only the dump has:
+
+- **Forums and topics Tapatalk never got.** That includes forum 40, "N Webcomics", with its topics and the posts the dump has of them. Forumer's rendered HTML is turned back into BBCode and run through `fix`, like the migrated posts, so quote tables, smileys, uploads and old links come out the same. Their posts are anchored by their old id (`#o<old id>`). Topics only known from forum listings get a page saying none of their posts were archived.
+- **Topic descriptions,** in a column of the topic tables.
+- **Members.** Accounts Tapatalk only knows by their id get their forumer name. Members Tapatalk lacks get a page of their own (`u/f<old id>.html`). Profiles add the forumer id and, when known, location, website, birthday, messenger ids and interests. A member's forumer-era avatar is shown under the Tapatalk one when the two differ.
+- **Guest posts** show the name forumer showed for them.
+- **Links to old post ids** (`[ts:topic … old_post=N]`) point at that post. Smileys are titled with the code members typed for them.
+
+Polls aren't shown yet. The profile fields are personal data, as noted above, so mind them before publishing the site.
 
 ## Login
 
