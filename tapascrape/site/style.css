@@ -1,0 +1,96 @@
+/* tapascrape static site. Every bit of styling lives here: edit freely. */
+
+:root {
+  --text: #222;
+  --muted: #777;
+  --background: #fff;
+  --panel: #f3f3f3;
+  --border: #ccc;
+  --link: #1a4f8b;
+  --quote: #f7f7f2;
+}
+
+body {
+  margin: 0;
+  padding: 6px 8px;
+  font: 12px/1.35 Verdana, Arial, sans-serif;
+  color: var(--text);
+  background: var(--background);
+}
+
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* -- header ----------------------------------------------------------------- */
+
+header {
+  margin-bottom: 6px;
+  padding: 4px 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+header .board { font-weight: bold; font-size: 14px; }
+header .crumbs { margin-top: 2px; }
+
+/* -- forum and topic tables ------------------------------------------------- */
+
+table.forums, table.topics, table.profile {
+  border-collapse: collapse;
+  margin-bottom: 8px;
+}
+table.forums, table.topics { width: 100%; }
+table.forums th, table.forums td, table.topics th, table.topics td,
+table.profile th, table.profile td {
+  padding: 2px 5px;
+  border: 1px solid var(--border);
+  vertical-align: top;
+  text-align: left;
+}
+table.forums thead th, table.topics thead th { background: var(--panel); white-space: nowrap; }
+td.id, td.count, td.date, td.flags { white-space: nowrap; }
+td.id, td.count { text-align: right; }
+td.flags { font-family: monospace; }
+td.description { color: var(--muted); }
+.indent { display: inline-block; width: 16px; }
+tr:target { background: #fff7cc; }
+
+/* -- posts ------------------------------------------------------------------ */
+
+.post { margin-bottom: 6px; border: 1px solid var(--border); }
+.post:target { border-color: #c9a200; }
+.post-head {
+  padding: 2px 5px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.post-head .index, .post-head .date { color: var(--muted); margin-left: 6px; }
+.post-head .author { margin-left: 6px; font-weight: bold; }
+.post-body { padding: 4px 6px; overflow-wrap: anywhere; }
+
+/* -- formatted text (post bodies and signatures) ---------------------------- */
+
+.quote { margin: 4px 0 4px 8px; padding: 3px 6px; background: var(--quote); border-left: 3px solid var(--border); }
+.quote-head { color: var(--muted); font-size: 11px; margin-bottom: 2px; }
+pre.code { margin: 4px 0; padding: 3px 6px; background: var(--panel); border: 1px solid var(--border); overflow-x: auto; }
+.spoiler { margin: 4px 0; padding: 2px 6px; border: 1px dashed var(--border); }
+.spoiler summary { cursor: pointer; color: var(--muted); }
+.align-center { text-align: center; }
+.align-left { text-align: left; }
+.align-right { text-align: right; }
+.align-justify { text-align: justify; }
+.bb-img { max-width: 100%; }
+.smiley { vertical-align: middle; }
+table.bb-table { border-collapse: collapse; }
+table.bb-table td { padding: 2px 4px; border: 1px solid var(--border); }
+.attachment { margin: 4px 0; }
+.attachment-missing, .smiley-missing { color: var(--muted); }
+
+/* -- user pages ------------------------------------------------------------- */
+
+.user { display: flex; gap: 8px; align-items: flex-start; }
+.avatar { max-width: 100px; max-height: 100px; }
+table.profile th { background: var(--panel); white-space: nowrap; }
+.signature { margin-top: 6px; padding-top: 4px; border-top: 1px solid var(--border); }
+
+.empty { color: var(--muted); }

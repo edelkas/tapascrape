@@ -2,7 +2,7 @@ import pytest
 
 from tapascrape.db import open_database
 from tapascrape.site.build import build_site
-from tapascrape.site.render import Linked, Links, Renderer
+from tapascrape.site.render import Linked, Links, Quoted, Renderer
 
 GIF = b"GIF89a\x01\x00\x01\x00\x00\x00\x00;"
 
@@ -24,6 +24,8 @@ GIF = b"GIF89a\x01\x00\x01\x00\x00\x00\x00;"
      '<a href="http://www.a.com">www.a.com</a> <a href="http://a.com">a <b>b</b></a>'),
     ("[img]http://a.com/x.png[/img]", '<img class="bb-img" src="http://a.com/x.png" alt="" loading="lazy">'),
     ("[table][tr]\n[td]a[/td]\n[/tr][/table]", '<table class="bb-table"><tr><td>a</td></tr></table>'),
+    ("[align=center][b]Soar.[/b][/align]\nx [center]c[/center] [align=up]u[/align]",
+     '<div class="align-center"><b>Soar.</b></div>x <div class="align-center">c</div> [align=up]u[/align]'),
 ])
 def test_render(bbcode, expected):
     assert Renderer().render(bbcode) == expected
@@ -41,7 +43,7 @@ class FakeLinks(Links):
         return f"t/{topic_id}.html"
 
     def quoted(self, post_id, position):
-        return "t/5.html#p10" if (post_id, position) == (12, 1) else None
+        return Quoted("t/5.html#p10", "Keron Cyst", "2006-06-26T16:06:00Z") if post_id == 12 else None
 
 
 def test_render_sentinels_and_quotes():
@@ -55,10 +57,14 @@ def test_render_sentinels_and_quotes():
         '<div class="attachment attachment-missing">Attachment (lost)</div>')
     html = r.render('[quote]x[/quote][code][quote][/code][quote="Keron Cyst" date="June 26, 2006 11:06 am"]\n'
                     "y\n[/quote]\nz", "../", post_id=12)
-    assert html == ('<blockquote class="quote"><div class="quote-head">Quote</div>x</blockquote>'
+    # the tag's attribution as written; what a bare one lacks, from the quoted post
+    assert html == ('<blockquote class="quote"><div class="quote-head"><a href="../t/5.html#p10">'
+                    "Quote: Keron Cyst, 2006-06-26T16:06:00Z</a></div>x</blockquote>"
                     '<pre class="code">[quote]</pre>'
                     '<blockquote class="quote"><div class="quote-head"><a href="../t/5.html#p10">'
                     "Quote: Keron Cyst, June 26, 2006 11:06 am</a></div>y</blockquote>z")
+    assert Renderer().render("[quote=x]y[/quote]") == (
+        '<blockquote class="quote"><div class="quote-head">Quote: x</div>y</blockquote>')
 
 
 def test_build_site(tmp_path):
@@ -84,8 +90,11 @@ def test_build_site(tmp_path):
             {"id": 13, "topic_id": 6, "user_id": 2, "index": 1, "timestamp": "2007-01-01 10:00:00",
              "content": "<b>html</b> only", "source": None, "source_fixed": None}])
         db.upsert_many("users", [{"id": 1, "name": "alice", "post_count": 1, "signature": "<i>sig</i>",
-                                  "joined_at": "2005-06-01 00:00:00"},
-                                 {"id": 2, "name": "bob", "post_count": 2, "signature": None, "joined_at": None}])
+                                  "joined_at": "2005-06-01 00:00:00", "rank": "Newbie"},
+                                 {"id": 2, "name": "bob", "post_count": 2, "signature": None, "joined_at": None,
+                                  "rank": None}])
+        db.upsert_many("groups", [{"id": 2, "name": "Registered users"}, {"id": 5, "name": "Admins"}])
+        db.upsert_many("group_users", [{"group_id": 5, "user_id": 1}, {"group_id": 2, "user_id": 1}])
         db.upsert_many("smilies", [{"id": 1, "url": "http://x/yay.gif", "name": "yay", "data": GIF}])
         db.upsert_many("quotes", [{"post_id": 11, "position": 0, "level": 1, "quoted_post_id": 10}])
         counts = build_site(db, tmp_path, "My Board")
@@ -102,13 +111,15 @@ def test_build_site(tmp_path):
     topic = (tmp_path / "t" / "5.html").read_text(encoding="utf-8")
     assert topic.index('id="p10"') < topic.index('id="p11"')
     assert '<img class="smiley" src="../files/smilies/1.gif"' in topic
-    assert '<a href="../t/5.html#p10">Quote: alice</a>' in topic
+    assert '<a href="../t/5.html#p10">Quote: alice, 2006-01-01T10:00:00Z</a>' in topic
     assert '<span class="author">Guest</span>' in topic
     assert "2006-01-01T10:00:00Z" in topic
     assert "<b>html</b> only" in (tmp_path / "t" / "6.html").read_text(encoding="utf-8")
     user = (tmp_path / "u" / "1.html").read_text(encoding="utf-8")
     assert '<a href="../t/5.html#p10">First</a>' in user and '<i>sig</i>' in user
     assert "2005-06-01T00:00:00Z" in user
+    assert ("<tr><th>Rank</th><td>Newbie</td></tr><tr><th>Groups</th><td>Registered users, Admins</td></tr>"
+            in user)
 
 
 def test_render_deep_nesting():
