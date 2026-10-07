@@ -3,7 +3,9 @@
     index.html          the board's forum tree
     f/<id>.html         a forum: its subforum tree, then its topics
     t/<id>.html         a topic: every post, oldest first (anchors #p<post id>)
+    users.html          every user (linked from every page's header)
     u/<id>.html         a user's profile
+    u/<id>-posts.html   all their posts, oldest first
     files/...           smileys, attachments and avatars stored in the database
     style.css           every bit of styling; edit it freely
 
@@ -22,6 +24,7 @@ import html
 import logging
 import re
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from importlib import resources
@@ -107,10 +110,16 @@ class User:
     page: str = ""                   # default u/<id>.html
     board_id: int | None = None      # the board's id for them; default the key
 
+    post_ids: list[int] = field(default_factory=list)  # their posts we have, oldest first
+
     def __post_init__(self):
         self.page = self.page or f"u/{self.id}.html"
         if self.board_id is None and self.id > 0:
             self.board_id = self.id
+
+    @property
+    def posts_page(self) -> str:
+        return self.page.removesuffix(".html") + "-posts.html"
 
 
 @dataclass
@@ -200,8 +209,12 @@ class SiteBuilder:
         for forum in self.board.forums.values():
             self.write_forum(forum)
         self.write_topics()
+        self.write_users()
+        progress = Progress("site: users", len(self.board.users))
         for user in self.board.users.values():
             self.write_user(user)
+            self.write_user_posts(user)
+            progress.advance()
         return {"forums": len(self.board.forums), "topics": len(self.board.topics),
                 "users": len(self.board.users), "posts": len(self.board.posts)}
 
@@ -247,6 +260,7 @@ class SiteBuilder:
                 board.forums[topic.forum_id].topics.append(topic)
         for user in board.users.values():
             user.first_post_id = user.last_post_id = None
+            user.post_ids = []
         for post in sorted(board.posts.values(), key=self.chronological):
             topic = board.topics.get(post.topic_id)
             if topic is not None and topic.first_post_id is None:
@@ -255,6 +269,7 @@ class SiteBuilder:
             if user is not None:
                 user.first_post_id = user.first_post_id or post.id
                 user.last_post_id = post.id
+                user.post_ids.append(post.id)
 
     @staticmethod
     def chronological(post: PostRef) -> tuple:
@@ -320,7 +335,7 @@ class SiteBuilder:
         """(label, HTML) rows of a user's page, signature aside; empty ones aren't shown."""
         rows = [("ID", number(user.board_id)), ("Name", escape(user.name)), ("Rank", plain(user.rank)),
                 ("Groups", plain(", ".join(user.groups))), ("Joined", iso(user.joined_at)),
-                ("Last active", iso(user.last_active_at)), ("Posts", number(user.post_count))]
+                ("Last active", iso(user.last_active_at)), ("Posts", self.post_count_link(user, root))]
         for label, post_id in (("First post", user.first_post_id), ("Last post", user.last_post_id)):
             post = self.board.posts.get(post_id) if post_id else None
             topic = self.board.topics.get(post.topic_id) if post else None
@@ -336,7 +351,27 @@ class SiteBuilder:
             return source
         return html_to_bbcode(content) if content else ""
 
+    def user_columns(self) -> list[tuple[str, str, "Callable[[User, str], str]"]]:
+        """(heading, cell class, cell HTML) of the users table."""
+        def post_date(post_id: int | None, root: str) -> str:
+            post = self.board.posts.get(post_id) if post_id else None
+            return f'<a href="{root}{post.href}">{iso(post.timestamp)}</a>' if post else ""
+
+        return [("ID", "id", lambda u, root: number(u.board_id)),
+                ("Name", "name", lambda u, root: f'<a href="{root}{u.page}">{escape(u.name)}</a>'),
+                ("Rank", "", lambda u, root: plain(u.rank)),
+                ("Joined", "date", lambda u, root: iso(u.joined_at)),
+                ("Last active", "date", lambda u, root: iso(u.last_active_at)),
+                ("Posts", "count", self.post_count_link),
+                ("First post", "date", lambda u, root: post_date(u.first_post_id, root)),
+                ("Last post", "date", lambda u, root: post_date(u.last_post_id, root))]
+
     # -- pieces --------------------------------------------------------------------------------
+
+    def post_count_link(self, user: User, root: str) -> str:
+        """The user's post count (the board's, else how many we have), linking to their posts."""
+        count = user.post_count if user.post_count is not None else len(user.post_ids)
+        return f'<a href="{root}{user.posts_page}">{number(count)}</a>'
 
     def user_link(self, user_id: int | None, root: str) -> str:
         name = escape(self.user_name(user_id))
@@ -426,8 +461,13 @@ class SiteBuilder:
                 f'<meta name="viewport" content="width=device-width, initial-scale=1">\n'
                 f'<title>{plain(title)}</title>\n<link rel="stylesheet" href="{root}style.css">\n</head>\n'
                 f'<body>\n<header><div class="board"><a href="{root}index.html">{plain(self.board.title)}</a>'
-                f'</div><nav class="crumbs">{trail}</nav></header>\n<main>\n{body}\n</main>\n</body>\n</html>\n')
+                f'</div>{self.shortcuts(root)}<nav class="crumbs">{trail}</nav></header>\n'
+                f'<main>\n{body}\n</main>\n</body>\n</html>\n')
         (self.out / path).write_text(page, encoding="utf-8")
+
+    def shortcuts(self, root: str) -> str:
+        """The header's links to the board-wide pages."""
+        return f'<nav class="shortcuts"><a href="{root}users.html">Users</a></nav>'
 
     def write_forum(self, forum: Forum) -> None:
         root = "../"
@@ -450,13 +490,13 @@ class SiteBuilder:
             self.write_topic(topic_id, posts)
             progress.advance()
 
-    def write_topic(self, topic_id: int, posts: list[PostRef]) -> None:
-        root = "../"
+    def post_blocks(self, posts: list[PostRef], column: str, value: int, root: str) -> list[str]:
+        """The posts as on a topic page; the posts table's `column` = `value` has their text."""
         texts = {}
         if any(post.text is None for post in posts):
             texts = {row[0]: self.post_text(*row[1:]) for row in self.db.query(
                 "SELECT id, source_fixed, source, CASE WHEN source IS NULL AND source_fixed IS NULL "
-                "THEN content END FROM posts WHERE topic_id = ?", (topic_id,))}
+                f"THEN content END FROM posts WHERE {column} = ?", (value,))}
         out = []
         for post in posts:
             text = post.text if post.text is not None else texts.get(post.id, "")
@@ -467,6 +507,11 @@ class SiteBuilder:
                        f'<span class="date">{iso(post.timestamp)}</span> '
                        f'<span class="author">{self.post_author(post, root)}</span></div>'
                        f'<div class="post-body">{body}</div></div>')
+        return out
+
+    def write_topic(self, topic_id: int, posts: list[PostRef]) -> None:
+        root = "../"
+        out = self.post_blocks(posts, "topic_id", topic_id, root)
         topic = self.board.topics.get(topic_id)
         name = topic.name if topic else f"Topic {topic_id}"
         crumbs = self.crumbs(topic.forum_id if topic else None) + [(None, name)]
@@ -482,7 +527,29 @@ class SiteBuilder:
         signature = (f'<div class="signature">{self.renderer.render(user.signature, root)}</div>'
                      if user.signature and user.signature.strip() else "")
         body = f'<div class="user">{avatars}<table class="profile">{rows}</table></div>{signature}'
-        self.write(user.page, root, [(None, user.name)], body, f"{user.name} - {self.board.title}")
+        self.write(user.page, root, [("users.html", "Users"), (None, user.name)], body,
+                   f"{user.name} - {self.board.title}")
+
+    def write_user_posts(self, user: User) -> None:
+        root = "../"
+        posts = [self.board.posts[post_id] for post_id in user.post_ids]
+        out = self.post_blocks(posts, "user_id", user.id, root)
+        body = "\n".join(out) or '<p class="empty">No posts of theirs were archived.</p>'
+        self.write(user.posts_page, root, [("users.html", "Users"), (user.page, user.name), (None, "Posts")],
+                   body, f"Posts by {user.name} - {self.board.title}")
+
+    def write_users(self) -> None:
+        columns = self.user_columns()
+        users = sorted(self.board.users.values(), key=lambda u: (u.board_id is None, u.board_id or 0, -u.id))
+        head = "".join(f"<th>{heading}</th>" for heading, _, _ in columns)
+        rows = []
+        for user in users:
+            cells = "".join(f'<td class="{cls}">{cell(user, "")}</td>' if cls else f"<td>{cell(user, '')}</td>"
+                            for _, cls, cell in columns)
+            rows.append(f"<tr>{cells}</tr>")
+        body = (f'<table class="users"><thead><tr>{head}</tr></thead><tbody>\n'
+                + "\n".join(rows) + "\n</tbody></table>")
+        self.write("users.html", "", [(None, "Users")], body, f"Users - {self.board.title}")
 
 
 def build_site(db: Database, out: Path, title: str) -> dict[str, int]:

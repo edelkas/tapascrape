@@ -39,6 +39,7 @@ def test_metanet_site(tmp_path):
             {"id": 8, "forum_id": 19, "title": "Only listed", "description": None, "in_tapatalk": False}]))
         db.upsert_many("forumer_members", uniform([
             {"old_id": 1, "name": "bobby_shaftoe", "user_id": 9370595, "location": "Here",
+             "group_name": "Members", "title": "Advanced Member",
              "country": "Australia", "msn": "bob@example.com", "website": "http://bob.example",
              "birthday": "1990-01-01", "interests": "N"},
             {"old_id": 2, "name": "Ghost", "user_id": None, "title": "Newbie", "post_count": 4,
@@ -84,8 +85,19 @@ def test_metanet_site(tmp_path):
     assert "<tr><th>Location</th><td>Here, Australia</td></tr>" in profile
     assert '<a href="http://bob.example">http://bob.example</a>' in profile
     assert "<tr><th>Socials</th><td>MSN: bob@example.com</td></tr>" in profile
+    assert ("<tr><th>Old title</th><td>Advanced Member</td></tr>"
+            "<tr><th>Main group</th><td>Members</td></tr>") in profile  # no Tapatalk rank nor groups
     assert "<th>Rank</th>" not in profile  # empty fields aren't shown
     assert profile.count('class="avatar"') == 2  # Tapatalk's and forumer's differ
     ghost = read("u/f2.html")
     assert "<th>ID</th>" not in ghost and "<tr><th>Forumer ID</th><td>2</td></tr>" in ghost
-    assert "<tr><th>Rank</th><td>Newbie</td></tr>" in ghost and "<b>boo</b>" in ghost
+    assert "<tr><th>Old title</th><td>Newbie</td></tr>" in ghost and "<th>Rank</th>" not in ghost
+    assert "<b>boo</b>" in ghost
+    assert '<tr><th>Posts</th><td><a href="../u/f2-posts.html">4</a></td></tr>' in ghost
+    assert 'id="o502"' in read("u/f2-posts.html")
+
+    users = read("users.html")
+    assert users.index("bobby_shaftoe") < users.index("Ghost")  # by id; those Tapatalk lacks last
+    assert ('<tr><td class="id">1</td><td class="id">9,370,595</td>'
+            '<td class="name"><a href="u/9370595.html">bobby_shaftoe</a></td>') in users
+    assert '<td class="count"><a href="u/f2-posts.html">4</a></td>' in users

@@ -157,10 +157,12 @@ Author and date alone aren't enough when the quote is long enough to compare and
 | `index.html` | the forum tree |
 | `f/<id>.html` | a forum: its subforum tree, then its topics |
 | `t/<id>.html` | a topic: every post, oldest first, each anchored as `#p<post id>` |
+| `users.html` | every user, by id: name, rank, join and last-active times, post count, first and last post |
 | `u/<id>.html` | a user: avatar, id, name, rank, groups, join and last-active times, post count, first and last post, signature (empty fields are left out) |
+| `u/<id>-posts.html` | all of a user's posts, oldest first, shown as on topic pages (linked from their post count) |
 | `files/` | the smileys, attachments and avatars stored in the database |
 
-There's one page per forum, topic and user, with no pagination. Every page starts with the board's name (`--title`) and the breadcrumbs down to it.
+There's one page per forum, topic and user, with no pagination. Every page starts with the board's name (`--title`), a line of shortcuts to the board-wide pages (for now, the users list), and the breadcrumbs down to it.
 
 - **Forum tables.** A forum's subforums are shown as a tree, nested levels indented. Each level is sorted by latest post: the forum's own, or a subforum's, whichever is newer. Each row shows the forum's own topic, post and view counts and its own last post.
 - **Topic tables.** Topics are sorted by last post, with stickies first. The flags column shows `S` for a sticky and `L` for a locked topic.
@@ -239,7 +241,7 @@ Images are checked to be images. Outcomes are recorded as `forumer-avatar:<old i
 
 - **Forums and topics Tapatalk never got.** That includes forum 40, "N Webcomics", with its topics and the posts the dump has of them. Forumer's rendered HTML is turned back into BBCode and run through `fix`, like the migrated posts, so quote tables, smileys, uploads and old links come out the same. Their posts are anchored by their old id (`#o<old id>`). Topics only known from forum listings get a page saying none of their posts were archived.
 - **Topic descriptions,** in a column of the topic tables.
-- **Members.** Accounts Tapatalk only knows by their id get their forumer name. Members Tapatalk lacks get a page of their own (`u/f<old id>.html`). Profiles add the forumer id and, when known, location, website, birthday, messenger ids and interests. A member's forumer-era avatar is shown under the Tapatalk one when the two differ.
+- **Members.** Accounts Tapatalk only knows by their id get their forumer name. Members Tapatalk lacks get a page of their own (`u/f<old id>.html`). Profiles add the forumer id, the forumer member title ("Old title", when it isn't the rank) and main group, and, when known, location, website, birthday, messenger ids and interests. The users list starts with an "Old ID" column. A member's forumer-era avatar is shown under the Tapatalk one when the two differ.
 - **Guest posts** show the name forumer showed for them.
 - **Links to old post ids** (`[ts:topic … old_post=N]`) point at that post. Smileys are titled with the code members typed for them.
 

@@ -30,23 +30,24 @@ header {
   border: 1px solid var(--border);
 }
 header .board { font-weight: bold; font-size: 14px; }
+header .shortcuts { margin-top: 2px; }
 header .crumbs { margin-top: 2px; }
 
 /* -- forum and topic tables ------------------------------------------------- */
 
-table.forums, table.topics, table.profile {
+table.forums, table.topics, table.users, table.profile {
   border-collapse: collapse;
   margin-bottom: 8px;
 }
 table.forums, table.topics { width: 100%; }
-table.forums th, table.forums td, table.topics th, table.topics td,
+table.forums th, table.forums td, table.topics th, table.topics td, table.users th, table.users td,
 table.profile th, table.profile td {
   padding: 2px 5px;
   border: 1px solid var(--border);
   vertical-align: top;
   text-align: left;
 }
-table.forums thead th, table.topics thead th { background: var(--panel); white-space: nowrap; }
+table.forums thead th, table.topics thead th, table.users thead th { background: var(--panel); white-space: nowrap; }
 td.id, td.count, td.date, td.flags { white-space: nowrap; }
 td.id, td.count { text-align: right; }
 td.flags { font-family: monospace; }

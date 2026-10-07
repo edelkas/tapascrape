@@ -118,6 +118,19 @@ def test_build_site(tmp_path):
     user = (tmp_path / "u" / "1.html").read_text(encoding="utf-8")
     assert '<a href="../t/5.html#p10">First</a>' in user and '<i>sig</i>' in user
     assert "2005-06-01T00:00:00Z" in user
+    assert '<nav class="shortcuts"><a href="../users.html">Users</a></nav>' in user
+    assert '<a href="../users.html">Users</a> &rsaquo; alice' in user
+    assert '<tr><th>Posts</th><td><a href="../u/1-posts.html">1</a></td></tr>' in user
+    posts = (tmp_path / "u" / "1-posts.html").read_text(encoding="utf-8")
+    assert 'id="p10"' in posts and "Hello" in posts and 'id="p11"' not in posts
+    assert '&rsaquo; <a href="../u/1.html">alice</a> &rsaquo; Posts' in posts
+    users = (tmp_path / "users.html").read_text(encoding="utf-8")
+    assert users.index('href="u/1.html"') < users.index('href="u/2.html"')
+    assert ('<tr><td class="id">1</td><td class="name"><a href="u/1.html">alice</a></td><td>Newbie</td>'
+            '<td class="date">2005-06-01T00:00:00Z</td><td class="date"></td>'
+            '<td class="count"><a href="u/1-posts.html">1</a></td>'
+            '<td class="date"><a href="t/5.html#p10">2006-01-01T10:00:00Z</a></td>'
+            '<td class="date"><a href="t/5.html#p10">2006-01-01T10:00:00Z</a></td></tr>') in users
     assert ("<tr><th>Rank</th><td>Newbie</td></tr><tr><th>Groups</th><td>Registered users, Admins</td></tr>"
             in user)
 

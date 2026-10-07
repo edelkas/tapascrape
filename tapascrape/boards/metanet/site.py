@@ -102,9 +102,8 @@ class MetanetSite(SiteBuilder):
             user = board.users.get(member["user_id"])
             if user is None:  # not on Tapatalk: a page of their own
                 user = User(-member["old_id"], member["name"] or f"member {member['old_id']}",
-                            member["title"], as_datetime(member["joined_at"]), None, member["post_count"],
-                            None, groups=[member["group_name"]] if member["group_name"] else [],
-                            page=f"u/f{member['old_id']}.html")
+                            None, as_datetime(member["joined_at"]), None, member["post_count"],
+                            None, page=f"u/f{member['old_id']}.html")
                 board.users[user.id] = user
             elif member["name"] and user.name == str(user.id):
                 user.name = member["name"]  # Tapatalk only knew them by their id
@@ -249,12 +248,24 @@ class MetanetSite(SiteBuilder):
             return f'{escape(self.authors[post.id])} <span class="guest">(guest)</span>'
         return super().post_author(post, root)
 
+    def user_columns(self):
+        def old_id(user: User, root: str) -> str:
+            member = self.member_of.get(user.id)
+            return number(member["old_id"]) if member else ""
+
+        return [("Old ID", "id", old_id)] + super().user_columns()
+
     def user_fields(self, user: User, root: str) -> list[tuple[str, str]]:
         rows = super().user_fields(user, root)
         member = self.member_of.get(user.id)
         if member is None:
             return rows
         rows.insert(1, ("Forumer ID", number(member["old_id"])))
+        labels = [label for label, _ in rows]
+        if member["title"] and member["title"] != user.rank:  # they often match
+            rows.insert(labels.index("Rank"), ("Old title", plain(member["title"])))
+            labels = [label for label, _ in rows]
+        rows.insert(labels.index("Groups"), ("Main group", plain(member["group_name"])))
         places = []
         for place in (member["specific_location"], member["location"], member["country"]):
             if place and place.strip() and place.strip() not in places:
