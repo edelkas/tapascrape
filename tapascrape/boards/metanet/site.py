@@ -12,6 +12,8 @@
 - Guest posts show the name forumer showed for them.
 - Links to old post ids ([ts:topic ... old_post=N]) point at that post.
 - Smileys are titled with the code members typed for them.
+- Links to NUMA (numa.notdot.net, dead) go to its new home, nmaps.net
+  (numa_url); their text stays as written.
 """
 
 import logging
@@ -35,6 +37,41 @@ log = logging.getLogger(__name__)
 DEEP_RECURSION = 20000      # Python-to-Python calls don't use the C stack (3.12+)
 ATTACHMENT_KEYS = 10 ** 9  # attachments only the dump has: this + their post's old id
 MESSENGERS = (("msn", "MSN"), ("aim", "AIM"), ("yahoo", "Yahoo"), ("icq", "ICQ"))
+NUMA = re.compile(r"(?:https?://)?(?:www\.)?numa\.notdot\.net(?=[/?#]|$)", re.IGNORECASE)
+NMAPS = "https://www.nmaps.net"
+
+
+def numa_url(url: str) -> str:
+    """A NUMA link, pointed at nmaps.net: the same paths, but maps lost their "/map"
+    (/map/85674 -> /85674) and author searches are queries (browse?author=X ->
+    browse?q=author:X, the other parameters kept as written)."""
+    m = NUMA.match(url)
+    if m is None:
+        return url
+    rest = url[m.end():]
+    rest, hash_, fragment = rest.partition("#")
+    path, mark, query = rest.partition("?")
+    path = re.sub(r"^/map/(?=\d)", "/", path, flags=re.IGNORECASE)
+    if path.rstrip("/").lower() == "/browse" and query:
+        params = query.split("&")
+        authors = [p.partition("=")[2] for p in params if p.partition("=")[0].lower() == "author"]
+        searches = [i for i, p in enumerate(params) if p.partition("=")[0].lower() == "q"]
+        terms = "+".join(f"author:{author}" for author in authors if author)
+        out = []
+        for param in params:
+            key = param.partition("=")[0].lower()
+            if key == "author":  # the first one becomes the query, if there's no query already
+                if terms and not searches:
+                    out.append(f"q={terms}")
+                    terms = ""
+            elif key == "q" and terms:  # joins a query of its own
+                out.append(f"{param}+{terms}" if param.partition("=")[2] else f"q={terms}")
+                terms = ""
+            else:
+                out.append(param)
+        query = "&".join(out)
+        mark = mark if query else ""
+    return NMAPS + path + mark + query + hash_ + fragment
 
 
 class MetanetLinks(BoardLinks):
@@ -44,6 +81,9 @@ class MetanetLinks(BoardLinks):
         if key is not None and key in self.board.posts:
             return self.board.posts[key].href
         return super().topic(topic_id, attrs)
+
+    def url(self, url):
+        return numa_url(url)
 
 
 class MetanetSite(SiteBuilder):

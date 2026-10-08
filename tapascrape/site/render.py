@@ -74,6 +74,10 @@ class Links:
         """The quoted post of the post's quote at `position`."""
         return None
 
+    def url(self, url: str) -> str:
+        """Where a link to `url` should go instead (a dead site's new home, say)."""
+        return url
+
 
 @dataclass
 class Quoted:
@@ -220,16 +224,16 @@ class Renderer:
                     child = _drop_first_break(child)
                 if i == len(children) - 1 and node.name in BLOCKS:
                     child = _drop_last_break(child)
-                out.append(self._text(child))
+                out.append(self._text(child, state))
             else:
                 out.append(self._node(child, state))
         return "".join(out)
 
-    def _text(self, text: str) -> str:
+    def _text(self, text: str, state: "_State") -> str:
         out, at = [], 0
-        for m in BARE_URL.finditer(text):
+        for m in BARE_URL.finditer(text) if not state.in_link else ():  # no links inside links
             url = m.group(0).rstrip(TRAILING)
-            href = safe_url(url)
+            href = self._href(url)
             if href is None:
                 continue
             out.append(escape(text[at:m.start()]))
@@ -239,7 +243,7 @@ class Renderer:
         return "".join(out).replace("\r\n", "\n").replace("\n", "<br>\n")
 
     def _literal(self, node: Node, state: "_State") -> str:
-        return self._text(node.open_text) + self._children(node, state)
+        return self._text(node.open_text, state) + self._children(node, state)
 
     def _node(self, node: Node, state: "_State") -> str:
         if not node.closed:
@@ -251,6 +255,19 @@ class Renderer:
     @staticmethod
     def _close(node: Node) -> str:
         return "" if node.name in VOID else escape(f"[/{node.name}]")
+
+    def _href(self, target: str) -> str | None:
+        """The safe href a link to `target` gets."""
+        return safe_url(self.links.url(html.unescape(target.strip())))
+
+    def _anchor(self, href: str, node: Node, state: "_State") -> str:
+        """<a> around the node's children, which then link nowhere themselves."""
+        outer, state.in_link = state.in_link, True
+        try:
+            inner = self._children(node, state)
+        finally:
+            state.in_link = outer
+        return inner if outer else f'<a href="{attribute(href)}">{inner}</a>'
 
     def _wrap(self, tag: str, node: Node, state: "_State", cls: str | None = None) -> str:
         cls_attr = f' class="{cls}"' if cls else ""
@@ -317,18 +334,20 @@ class Renderer:
 
     def tag_url(self, node, state):
         target = attr_value(node.attr) or text_of(node)
-        href = safe_url(target)
+        href = self._href(target)
         if href is None:
             return None
-        inner = self._children(node, state) if node.attr else ""
-        return f'<a href="{attribute(href)}">{inner if inner.strip() else escape(target)}</a>'
+        if node.attr and text_of(node).strip():
+            return self._anchor(href, node, state)
+        return escape(target) if state.in_link else f'<a href="{attribute(href)}">{escape(target)}</a>'
 
     def tag_email(self, node, state):
         address = (attr_value(node.attr) or text_of(node)).strip()
         if "@" not in address or any(c in address for c in " <>\"'"):
             return None
-        inner = self._children(node, state) if node.attr else escape(address)
-        return f'<a href="mailto:{attribute(address)}">{inner}</a>'
+        if node.attr:
+            return self._anchor(f"mailto:{address}", node, state)
+        return escape(address) if state.in_link else f'<a href="mailto:{attribute(address)}">{escape(address)}</a>'
 
     def tag_img(self, node, state):
         src = safe_url(text_of(node))
@@ -420,21 +439,21 @@ class Renderer:
         found = self._attachment(node, state)
         if found is None or found.href is None:
             return f'<span class="attachment-missing">{self._children(node, state)}</span>'
-        return f'<a href="{attribute(state.root + found.href)}">{self._children(node, state)}</a>'
+        return self._anchor(state.root + found.href, node, state)
 
     def tag_ts_topic(self, node, state):
         topic_id, attrs = sentinel_attrs(node.attr)
         href = self.links.topic(topic_id, attrs) if topic_id is not None else None
         if href is None:
             return self._children(node, state)
-        return f'<a href="{attribute(state.root + href)}">{self._children(node, state)}</a>'
+        return self._anchor(state.root + href, node, state)
 
     def tag_ts_forum(self, node, state):
         forum_id, _ = sentinel_attrs(node.attr)
         href = self.links.forum(forum_id) if forum_id is not None else None
         if href is None:
             return self._children(node, state)
-        return f'<a href="{attribute(state.root + href)}">{self._children(node, state)}</a>'
+        return self._anchor(state.root + href, node, state)
 
 
 @dataclass
@@ -442,6 +461,7 @@ class _State:
     root: str
     post_id: int | None
     quotes: dict[int, Quote]
+    in_link: bool = False
 
 
 def _drop_first_break(text: str) -> str:

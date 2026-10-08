@@ -51,6 +51,10 @@ def test_render_sentinels_and_quotes():
     assert r.render("[ts:smiley=3] [ts:topic=996 start=20]here[/ts:topic]", "../") == (
         '<img class="smiley" src="../files/smilies/3.gif" alt="yay" title="yay"> '
         '<a href="../t/996.html">here</a>')
+    # links inside links render as their text: a fixed [url] keeps its URL as the label
+    assert r.render("[ts:topic=996]http://x.com/?showtopic=996[/ts:topic] "
+                    "[ts:topic=996][url=http://a.b]see[/url] http://c.d [url]http://e.f[/url][/ts:topic]") == (
+        '<a href="t/996.html">http://x.com/?showtopic=996</a> <a href="t/996.html">see http://c.d http://e.f</a>')
     assert r.render("[ts:attachment=7][ts:attachment=8][ts:attachment=9]") == (
         '<div class="attachment">Attachment: <a href="files/attachments/7-a.zip">a.zip</a></div>'
         '<div class="attachment attachment-missing">Attachment (lost): b.zip</div>'

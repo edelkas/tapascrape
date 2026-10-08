@@ -244,6 +244,7 @@ Images are checked to be images. Outcomes are recorded as `forumer-avatar:<old i
 - **Members.** Accounts Tapatalk only knows by their id get their forumer name. Members Tapatalk lacks get a page of their own (`u/f<old id>.html`). Profiles add the forumer id, the forumer member title ("Old title", when it isn't the rank) and main group, and, when known, location, website, birthday, messenger ids and interests. The users list starts with an "Old ID" column. A member's forumer-era avatar is shown under the Tapatalk one when the two differ.
 - **Guest posts** show the name forumer showed for them.
 - **Links to old post ids** (`[ts:topic … old_post=N]`) point at that post. Smileys are titled with the code members typed for them.
+- **Links to NUMA** (`numa.notdot.net`, now dead) go to its new home, `https://www.nmaps.net`, with the same path, keeping their text. Map pages lose their `/map` (`/map/85674` → `/85674`), and author searches become queries (`browse?sort=created&author=X` → `browse?sort=created&q=author:X`, other parameters kept). Images (`[img]`) are left alone.
 
 Polls aren't shown yet. The profile fields are personal data, as noted above, so mind them before publishing the site.
 

@@ -1,5 +1,7 @@
 from tapascrape.boards.metanet.schema import TABLES
-from tapascrape.boards.metanet.site import build_metanet_site
+import pytest
+
+from tapascrape.boards.metanet.site import build_metanet_site, numa_url
 from tapascrape.db import open_database
 
 GIF = b"GIF89a\x01\x00\x01\x00\x00\x00\x00;"
@@ -23,7 +25,8 @@ def test_metanet_site(tmp_path):
                                    "view_count": 3, "last_post_id": 11}])
         db.upsert_many("posts", [
             {"id": 10, "topic_id": 5, "user_id": 0, "index": 1, "timestamp": "2006-01-01 10:00:00",
-             "content": "", "source": "x", "source_fixed": "first"},
+             "content": "", "source": "x",
+             "source_fixed": "first [url=http://numa.notdot.net/map/85674]Eloppp[/url] http://numa.notdot.net/"},
             {"id": 11, "topic_id": 5, "user_id": 9370595, "index": 2, "timestamp": "2006-01-02 10:00:00",
              "content": "", "source": "x", "source_fixed": "see [ts:topic=9 old_post=501]that[/ts:topic]"}])
         db.upsert_many("users", [{"id": 9370595, "name": "9370595", "avatar_id": 1}])
@@ -78,6 +81,8 @@ def test_metanet_site(tmp_path):
     assert '<a href="../u/f2.html">Ghost</a>' in lost and 'passerby <span class="guest">(guest)</span>' in lost
     kept = read("t/5.html")
     assert '<a href="../t/9.html#o501">that</a>' in kept
+    assert '<a href="https://www.nmaps.net/85674">Eloppp</a>' in kept
+    assert '<a href="https://www.nmaps.net/">http://numa.notdot.net/</a>' in kept
 
     profile = read("u/9370595.html")
     assert ("<tr><th>ID</th><td>9,370,595</td></tr><tr><th>Forumer ID</th><td>1</td></tr>"
@@ -101,3 +106,23 @@ def test_metanet_site(tmp_path):
     assert ('<tr><td class="id">1</td><td class="id">9,370,595</td>'
             '<td class="name"><a href="u/9370595.html">bobby_shaftoe</a></td>') in users
     assert '<td class="count"><a href="u/f2-posts.html">4</a></td>' in users
+
+
+@pytest.mark.parametrize("url, expected", [
+    ("http://numa.notdot.net/user/nevermore", "https://www.nmaps.net/user/nevermore"),
+    ("http://numa.notdot.net/map/85674", "https://www.nmaps.net/85674"),
+    ("http://www.numa.notdot.net/map/1949/#top", "https://www.nmaps.net/1949/#top"),
+    ("numa.notdot.net/submit", "https://www.nmaps.net/submit"),
+    ("http://numa.notdot.net", "https://www.nmaps.net"),
+    ("http://numa.notdot.net/browse?author=nevermore", "https://www.nmaps.net/browse?q=author:nevermore"),
+    ("http://numa.notdot.net/browse?sort=created&order=desc&author=nevermore",
+     "https://www.nmaps.net/browse?sort=created&order=desc&q=author:nevermore"),
+    ("http://numa.notdot.net/browse?category=&author=&sort=created",  # an empty author goes
+     "https://www.nmaps.net/browse?category=&sort=created"),
+    ("http://numa.notdot.net/browse?q=bitesized&author=x", "https://www.nmaps.net/browse?q=bitesized+author:x"),
+    ("http://numa.notdot.net/browse?q=author:Mekkah", "https://www.nmaps.net/browse?q=author:Mekkah"),
+    ("http://numa.notdot.net/userlevels?author=x", "https://www.nmaps.net/userlevels?author=x"),
+    ("http://numa.notdot.net.example.com/map/1", "http://numa.notdot.net.example.com/map/1"),
+])
+def test_numa_url(url, expected):
+    assert numa_url(url) == expected
