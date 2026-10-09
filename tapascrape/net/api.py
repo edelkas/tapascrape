@@ -212,6 +212,7 @@ class TapatalkApi:
             post_count=int(raw.get("total_post_num") or int(raw.get("reply_number", 0)) + 1),
             view_count=int(raw.get("view_number", 0)),
             author_name=raw.get("topic_author_name") or None,
+            has_poll=bool(raw.get("has_poll")),
         )
 
     # -- posts -----------------------------------------------------------
@@ -235,6 +236,11 @@ class TapatalkApi:
             for i, raw in enumerate(page.get("posts", []))
         ]
         return int(page.get("total_post_num", 0)), posts
+
+    def poll(self, topic_id: int) -> dict | None:
+        """The topic's poll as get_thread returns it (title, options with vote_count,
+        max_options...), None if it has none. Bumps the topic's view count."""
+        return self.call("get_thread", str(topic_id), 0, 0, True).get("poll") or None
 
     def iter_posts(self, topic_id: int) -> Iterator[Post]:
         """All posts of a topic in order."""

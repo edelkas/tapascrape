@@ -11,7 +11,7 @@ pip install -e .[dev,browser]
 tapascrape dry-run metanetfr            # lists every topic to count posts (~7 min at 1 req/s)
 tapascrape dry-run metanetfr --no-posts # topic counts only (~1 min)
 
-# Full scrape: forums -> topics -> posts -> users (+avatars) -> finalize.
+# Full scrape: forums -> topics -> polls -> posts -> users (+avatars) -> finalize.
 tapascrape crawl metanetfr --db sqlite:///metanet.db
 tapascrape crawl metanetfr --db mysql://user:pass@localhost/metanet   # database must exist
 tapascrape crawl metanetfr --db sqlite:///test.db --forum 54          # a single forum
@@ -46,6 +46,8 @@ tapascrape finalize --db sqlite:///metanet.db   # recompute aggregate columns
 
 `crawl` is resumable. Progress is stored in the `crawl_state` table, down to the page within a topic, so rerunning after Ctrl-C or an error continues where it stopped. Forums whose topics were already listed are skipped unless `--refresh-topics` is given. The same goes for fetched users and `--refresh-users`. Use `--rate` to set the maximum number of requests per second (default 1). The whole Metanet board takes about 16k requests.
 
+**Polls.** Topic listings say which topics have a poll (`topics.has_poll`), so only those topics are opened, with one `get_thread` call each. The poll's question, its options and their votes go into `polls`. `vote_count` is the sum of the options' votes, which counts voters only when members could pick a single option (`max_options` 1). Forums listed before polls were recorded (`has_poll` NULL) are listed again on the next `crawl`. That takes one request per 50 topics, then the polls are fetched. `--no-polls` skips the step, and `status` shows the polls still pending.
+
 ## Schema
 
 All IDs are the board's own IDs. Datetimes are UTC. `posts.content` and `users.signature` hold raw HTML.
@@ -53,7 +55,7 @@ All IDs are the board's own IDs. Datetimes are UTC. `posts.content` and `users.s
 | table | columns |
 |---|---|
 | forums | id, parent_id, name, description, last_post_id, post_count, view_count |
-| topics | id, forum_id, user_id, name, stickied, locked, created_at, post_count, view_count, last_post_id |
+| topics | id, forum_id, user_id, name, stickied, locked, created_at, post_count, view_count, last_post_id, has_poll |
 | posts | id, topic_id, user_id, index, timestamp, content, source, source_fixed |
 | users | id, name, rank, joined_at, last_active_at, post_count, signature, signature_source, signature_fixed, avatar_url, avatar_id |
 | avatars | id, user_id, data |
@@ -62,6 +64,7 @@ All IDs are the board's own IDs. Datetimes are UTC. `posts.content` and `users.s
 | smilies | id, url, name, host, uses, content_type, data, recovered_from |
 | attachments | id, kind, url, name, old_forum_id, uploaded_at, old_attach_id, first_post_id, uses, content_type, size, data, recovered_from |
 | quotes | post_id, position, level, parent_position, author, date, quoted_post_id, quoted_user_id, match, similarity, tz_offset |
+| polls | topic_id, title, vote_count, option_count, max_options, options (JSON: `[{"text", "votes"}, …]`) |
 | crawl_state | key, value |
 
 `finalize` computes these columns:

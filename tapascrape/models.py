@@ -37,6 +37,7 @@ class Topic:
     last_post_id: int | None = None
     created_at: datetime | None = None  # first post's timestamp; set by finalize
     author_name: str | None = None  # not a topics column; seeds users.name
+    has_poll: bool = False
 
 
 @dataclass

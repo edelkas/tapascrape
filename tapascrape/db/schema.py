@@ -63,6 +63,7 @@ TOPICS = Table("topics", (
     Column("post_count", INT),
     Column("view_count", INT),
     Column("last_post_id", INT),
+    Column("has_poll", BOOL),  # NULL: listed before polls were recorded
 ), primary_key=("id",), indexes=(Index("ix_topics_forum", ("forum_id",)),))
 
 POSTS = Table("posts", (
@@ -157,6 +158,16 @@ QUOTES = Table("quotes", (
     Column("tz_offset", INT),                 # minutes the quote's date is off the post's UTC time
 ), primary_key=("post_id", "position"), indexes=(Index("ix_quotes_quoted", ("quoted_post_id",)),))
 
+# A topic's poll (a topic has at most one), as get_thread returns it.
+POLLS = Table("polls", (
+    Column("topic_id", INT, nullable=False),
+    Column("title", TEXT),                    # the question
+    Column("vote_count", INT),                # votes cast, all options together
+    Column("option_count", INT),
+    Column("max_options", INT),               # how many options a member could pick
+    Column("options", LONGTEXT),              # JSON: [{"text": ..., "votes": n}, ...] in order
+), primary_key=("topic_id",))
+
 # Bookkeeping for resumable crawls (e.g. "topic:6364" -> "done").
 CRAWL_STATE = Table("crawl_state", (
     Column("key", TEXT, nullable=False),
@@ -164,7 +175,7 @@ CRAWL_STATE = Table("crawl_state", (
 ), primary_key=("key",))
 
 TABLES = (FORUMS, TOPICS, POSTS, USERS, AVATARS, GROUPS, GROUP_USERS, SMILIES, ATTACHMENTS, QUOTES,
-          CRAWL_STATE)
+          POLLS, CRAWL_STATE)
 TABLES_BY_NAME = {t.name: t for t in TABLES}
 
 

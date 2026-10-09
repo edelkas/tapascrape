@@ -8,6 +8,7 @@ from tapascrape.config import BoardConfig
 from tapascrape.crawl import users as users_module
 from tapascrape.crawl.finalize import finalize
 from tapascrape.crawl.forums import store_forums
+from tapascrape.crawl.polls import crawl_polls, pending_polls
 from tapascrape.crawl.posts import GAP_PREFIX, crawl_posts, pending_topics
 from tapascrape.crawl.sources import GAP_PREFIX as SOURCE_GAP
 from tapascrape.crawl.sources import SourcesAborted, crawl_sources, pending_sources
@@ -26,6 +27,8 @@ TOPICS = {
     24242: ("54", False, True, 342, [(900, 9370441, T0 - 1000), (901, 9371303, T0 - 500)]),
     7000: ("1", False, False, 5, [(1000, 42, T0 + 99999)]),
 }
+POLLS = {24242: {"title": "Most challenging?", "max_options": "1", "options": [
+    {"id": "127", "text": "Mine", "vote_count": "8"}, {"id": "127", "text": "Thwump", "vote_count": "2"}]}}
 USERS = {
     9370681: ("Kablizzy", ["2"], ""),
     9371303: ("Captain Planet", ["5", "2"], "https://cdn.test/cp.png"),
@@ -56,7 +59,7 @@ class FakeApi(TapatalkApi):
             {"topic_id": str(tid), "forum_id": f, "topic_title": f"T{tid}",
              "topic_author_id": str(posts[0][1]), "topic_author_name": USERS.get(posts[0][1], ("Ghost",))[0],
              "is_sticky": sticky, "is_closed": closed, "view_number": views,
-             "total_post_num": len(posts)}
+             "total_post_num": len(posts), "has_poll": tid in POLLS}
             for tid, (f, sticky, closed, views, posts) in TOPICS.items()
             if f == fid and (mode == "TOP") == sticky and mode != "ANN"]
         return {"total_topic_num": len(rows), "topics": rows[start:end + 1]}
@@ -68,7 +71,8 @@ class FakeApi(TapatalkApi):
         if any((int(tid), o) in self.broken_offsets for o in range(start, end + 1)):
             raise ApiError("get_thread: (SQL-ERROR-CODE:1267) SQL ERROR [ mysqli ]\n\nIllegal mix")
         posts = TOPICS[int(tid)][4]
-        return {"total_post_num": len(posts), "posts": [
+        poll = {"poll": POLLS[int(tid)]} if int(tid) in POLLS else {}
+        return {**poll, "total_post_num": len(posts), "posts": [
             {"post_id": str(pid), "post_author_id": str(uid),
              "post_author_name": USERS.get(uid, ("Ghost",))[0], "position": i + 1,
              "timestamp": str(ts), "post_content": f"<p>{pid}</p>"}
@@ -128,6 +132,7 @@ def all_forums():
 def run_crawl(api, db):
     store_forums(db, forums())
     crawl_topics(api, db, all_forums())
+    crawl_polls(api, db)
     crawl_posts(api, db)
     crawl_users(api, db)
     finalize(db)
@@ -359,3 +364,31 @@ def test_refresh_avatars(db, monkeypatch):
         (1, b"original1"), (2, b"original2"), (3, b"old3")]
     assert db.states(ORIGINAL_PREFIX) == {"1": "done", "2": "done", "3": "gone"}
     assert refresh_avatars(db, Throttle(0)) == (0, 0)  # resumable: nothing left
+
+
+def test_polls(db):
+    store_forums(db, forums())
+    api = FakeApi()
+    crawl_topics(api, db, all_forums())
+    assert db.query("SELECT id, has_poll FROM topics ORDER BY id") == [(6364, 0), (7000, 0), (24242, 1)]
+    assert pending_polls(db) == [24242] and pending_polls(db, [1]) == []
+    assert crawl_polls(api, db) == 1
+    # only the topic with a poll was opened
+    assert [c[1] for c in api.calls if c[0] == "get_thread"] == [("24242", 0, 0, True)]
+    assert db.query("SELECT * FROM polls") == [
+        (24242, "Most challenging?", 10, 2, 1, '[{"text": "Mine", "votes": 8}, {"text": "Thwump", "votes": 2}]')]
+    assert pending_polls(db) == [] and crawl_polls(api, db) == 0
+
+
+def test_listings_from_before_polls_are_listed_again(db):
+    store_forums(db, forums())
+    crawl_topics(FakeApi(), db, all_forums())
+    db.execute("UPDATE topics SET has_poll = NULL")
+    db.execute("UPDATE crawl_state SET value = 'done' WHERE key LIKE 'forum-topics:%'")  # an older crawl
+    api = FakeApi()
+    crawl_topics(api, db, all_forums())
+    assert len([c for c in api.calls if c[0] == "get_topic"]) > 0
+    assert db.query("SELECT has_poll FROM topics WHERE id = 24242") == [(1,)]
+    again = FakeApi()
+    crawl_topics(again, db, all_forums())
+    assert not again.calls

@@ -16,6 +16,7 @@ from tapascrape.content.smilies import (collect_smilies, pending_smilies, recove
 from tapascrape.crawl.enrich import enrich_profiles, pending_profiles, recover_gaps
 from tapascrape.crawl.finalize import finalize
 from tapascrape.crawl.forums import print_tree, store_forums, survey
+from tapascrape.crawl.polls import crawl_polls, pending_polls
 from tapascrape.crawl.posts import GAP_PREFIX, crawl_posts, pending_topics
 from tapascrape.crawl.sources import GAP_PREFIX as SOURCE_GAP_PREFIX
 from tapascrape.crawl.sources import (ORIGIN_PREFIX, crawl_sources, pending_sources,
@@ -115,6 +116,8 @@ def cmd_crawl(args: argparse.Namespace) -> int:
             forum_ids = [f.id for f in forums]
 
         log.info("topics: %d listed", crawl_topics(api, db, forums, refresh=args.refresh_topics))
+        if not args.no_polls:
+            crawl_polls(api, db, forum_ids)
         if not args.no_posts:
             crawl_posts(api, db, forum_ids)
         if not args.no_users:
@@ -393,7 +396,7 @@ def print_status(db, out) -> None:
         print(f"{table.name:>12}: {count:,}", file=out)
     print(f"{'pending':>12}: {len(pending_topics(db, None)):,} topics, "
           f"{len(pending_users(db)):,} users, {len(pending_profiles(db)):,} HTML profiles, "
-          f"{len(pending_sources(db)):,} post sources", file=out)
+          f"{len(pending_sources(db)):,} post sources, {len(pending_polls(db)):,} polls", file=out)
     source_gaps = len(db.states(SOURCE_GAP_PREFIX))
     if source_gaps:
         print(f"{'no source':>12}: {source_gaps:,} posts", file=out)
@@ -442,6 +445,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--refresh-topics", action="store_true", help="re-list topics of done forums")
     p.add_argument("--refresh-users", action="store_true", help="re-fetch already stored users")
     p.add_argument("--no-posts", action="store_true", help="skip fetching posts")
+    p.add_argument("--no-polls", action="store_true", help="skip fetching polls")
     p.add_argument("--no-users", action="store_true", help="skip fetching users")
     p.add_argument("--no-members", action="store_true",
                    help="only fetch users who posted, not the whole member list")
