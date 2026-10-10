@@ -16,6 +16,9 @@ GIF = b"GIF89a\x01\x00\x01\x00\x00\x00\x00;"
     ("[list][*]a[/list]", "<ul><li>a</li></ul>"),
     ("[color=RED'>]x[/color] [color=red]y[/color]", "[color=RED'&gt;]x[/color] <span style=\"color:red\">y</span>"),
     ("[size=14]z[/size] [size=2]w[/size]", '<span style="font-size:14px">z</span> <span style="font-size:82%">w</span>'),
+    ("[size=10pt]a[/size] [size=1.5EM]b[/size] [size=-7]c[/size] [size=900pt]d[/size]",
+     '<span style="font-size:10pt">a</span> <span style="font-size:1.5em">b</span> [size=-7]c[/size] '
+     '[size=900pt]d[/size]'),
     ("[sarcasm]no[/sarcasm] [b]unclosed", "[sarcasm]no[/sarcasm] [b]unclosed"),
     ("[code][b]literal[/b] <x>[/code]", '<pre class="code">[b]literal[/b] &lt;x&gt;</pre>'),
     ("[spoiler=Title]s[/spoiler]", '<details class="spoiler"><summary>Spoiler: Title</summary>s</details>'),

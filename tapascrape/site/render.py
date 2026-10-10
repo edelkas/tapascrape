@@ -39,6 +39,9 @@ TRAILING = ".,;:!?)'\""
 COLOR = re.compile(r"#?[0-9a-f]{3}(?:[0-9a-f]{3})?|[a-z]{3,20}", re.IGNORECASE)
 FONT = re.compile(r"[a-z0-9 ,'-]{1,40}", re.IGNORECASE)
 LEGACY_SIZES = {1: 63, 2: 82, 3: 100, 4: 113, 5: 150, 6: 200, 7: 300}  # <font size=N>, in %
+# Sizes with a CSS unit (from HTML styles: forumer wrote [size=N] as (N + 7)pt), and the largest kept.
+UNIT_SIZE = re.compile(r"(\d{1,3}(?:\.\d{1,2})?)(pt|px|em|%)", re.IGNORECASE)
+UNIT_LIMITS = {"pt": 72, "px": 96, "em": 6, "%": 300}
 LIST_TYPES = {"1": "1", "a": "a", "A": "A", "i": "i", "I": "I"}
 SAFE_URL = re.compile(r"(?:https?|ftp)://|mailto:", re.IGNORECASE)
 # Deeper tags stay text (one post nests 210 quotes); rendering recurses a few frames a level.
@@ -177,6 +180,9 @@ def sentinel_attrs(attr: str) -> tuple[int | None, dict[str, str]]:
 
 
 def font_size(value: str) -> str | None:
+    if unit := UNIT_SIZE.fullmatch(value.strip()):
+        number, name = unit.group(1), unit.group(2).lower()
+        return f"{number}{name}" if float(number) <= UNIT_LIMITS[name] else None
     try:
         size = int(value)
     except ValueError:
