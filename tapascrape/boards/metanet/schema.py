@@ -49,9 +49,20 @@ FORUMER_TOPICS = Table("forumer_topics", (
     Column("description", TEXT),            # IPB's topic description, which Tapatalk lacks
     Column("started_at", DATETIME),
     Column("pinned", BOOL),
-    Column("poll", LONGTEXT),               # JSON {"question", "options": [[text, votes]...], "votes"}
+    Column("has_poll", BOOL),               # NULL: never seen listed or opened (see polls)
     Column("in_tapatalk", BOOL),            # whether `topics` has it (some never made it)
-), primary_key=("id",))
+), primary_key=("id",), dropped=("poll",))  # the poll's JSON, now in forumer_polls
+
+# The polls the dump shows the results of: like `polls`, with the most voted copy kept.
+FORUMER_POLLS = Table("forumer_polls", (
+    Column("topic_id", INT, nullable=False),  # = forumer_topics.id
+    Column("title", TEXT),                    # the question
+    Column("vote_count", INT),                # "Total Votes"
+    Column("option_count", INT),
+    Column("max_options", INT),               # NULL: forumer's pages don't say
+    Column("options", LONGTEXT),              # JSON: [{"text": ..., "votes": n}, ...] in order
+    Column("source_file", TEXT),              # dump file it was read from
+), primary_key=("topic_id",))
 
 FORUMER_POSTS = Table("forumer_posts", (
     Column("id", INT, nullable=False),      # forumer's post id (old_post= in sentinels)
@@ -107,6 +118,6 @@ FORUMER_AVATARS = Table("forumer_avatars", (
     Column("recovered_from", TEXT),           # the Wayback capture
 ), primary_key=("old_id",))
 
-TABLES = (FORUMER_MEMBERS, FORUMER_FORUMS, FORUMER_TOPICS, FORUMER_POSTS, FORUMER_ATTACHMENTS, FORUMER_ARCHIVE_POSTS,
+TABLES = (FORUMER_MEMBERS, FORUMER_FORUMS, FORUMER_TOPICS, FORUMER_POLLS, FORUMER_POSTS, FORUMER_ATTACHMENTS, FORUMER_ARCHIVE_POSTS,
           FORUMER_EMOTICONS, FORUMER_AVATARS)
 register(*TABLES)

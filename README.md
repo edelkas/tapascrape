@@ -187,6 +187,7 @@ Before Yuku and Tapatalk, Metanet Forums was an Invision Power Board on Forumer 
 
 ```sh
 tapascrape metanet import-dump forumer_wayback_machine --db sqlite:///metanet.db   # -> forumer_* tables
+tapascrape metanet polls forumer_wayback_machine --db sqlite:///metanet.db   # -> forumer_polls (resumable)
 tapascrape metanet link --db sqlite:///metanet.db   # old ids -> ours; stores the dump's attachment files
 tapascrape metanet attachments --db sqlite:///metanet.db   # archived act=Attach downloads (Wayback)
 tapascrape metanet avatars --db sqlite:///metanet.db       # forumer-era avatars -> forumer_avatars (Wayback)
@@ -196,12 +197,15 @@ tapascrape metanet site --db sqlite:///metanet.db --out site   # `site`, with wh
 
 Both commands can be rerun. `import-dump` skips the dump's error, login-only and parked-domain pages. It understands the board's skins, which use different date formats.
 
+`polls` reads only the forum and topic pages. Forum listings mark topics that have a poll, with "Poll:" before the title and a poll icon, so `forumer_topics.has_poll` is known even for topics whose page wasn't saved (NULL: the topic was never seen listed). Results come from the saved topic pages. A topic saved several times shows different tallies, and the copy with the most votes, which is the latest, is kept. Each page read is recorded as `forumer-polls:<file>` in `crawl_state`, so an interrupted run resumes, and `--refresh` reads everything again. Older versions kept the poll as JSON in `forumer_topics.poll`. That column is dropped the first time the schema is updated, so run `polls` to fill `forumer_polls`.
+
 | table | what |
 |---|---|
 | forumer_members | old_id, name, user_id, match, group_name, title, joined_at, post_count, avatar_url, country, signature, birthday, location, specific_location, interests, website, msn, aim, yahoo, icq, integrity |
 | forumer_posts | id (old post id), topic_id, forum_id, post_id, match, member_id, author, posted, posted_at, html, edited_by, edited_at, source_file |
 | forumer_forums | id, name, description, parent_id, category, in_tapatalk: forums named by the pages' navigation and forum listings |
-| forumer_topics | id, forum_id, title, description, started_at, pinned, poll (JSON with vote counts), in_tapatalk |
+| forumer_topics | id, forum_id, title, description, started_at, pinned, has_poll, in_tapatalk |
+| forumer_polls | topic_id, title, vote_count, option_count, max_options (always NULL), options, source_file: like `polls` |
 | forumer_attachments | old_post_id, ref, kind, name (original file name), downloads, attachment_id, content_type, data, source_file |
 | forumer_archive_posts | topic_id, position, author, posted_on, html, post_id: the lite archive (`a/`), which has no post ids |
 | forumer_emoticons | url, code: what members typed for each smiley image |

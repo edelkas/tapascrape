@@ -60,9 +60,6 @@ class Collected:
             for key in ("forum_id", "title", "description"):
                 if getattr(page, key) and not topic.get(key):
                     topic[key] = getattr(page, key)
-            # Pages saved at different times show different tallies; keep the latest (most votes).
-            if page.poll and (page.poll.get("votes") or 0) >= (topic.get("_votes") or -1):
-                topic["poll"], topic["_votes"] = parse.poll_json(page.poll), page.poll.get("votes") or 0
         for post in page.posts:
             post.topic_id = post.topic_id or topic_id
             post.forum_id = post.forum_id or page.forum_id
@@ -188,7 +185,7 @@ def import_dump(db: Database, root: Path) -> Counter:
              for post, file in found.posts.values()]
     topics = [{"id": t["id"], "forum_id": t.get("forum_id"), "title": t.get("title"),
                "description": t.get("description"), "started_at": t.get("started_at"),
-               "pinned": bool(t.get("pinned")), "poll": t.get("poll"),
+               "pinned": bool(t.get("pinned")),
                "in_tapatalk": t["id"] in known_topics} for t in found.topics.values()]
     known_forums = {forum_id for forum_id, in db.query("SELECT id FROM forums")}
     forums = [{"id": f["id"], "name": f.get("name"), "description": f.get("description"),
@@ -221,7 +218,6 @@ def import_dump(db: Database, root: Path) -> Counter:
         "topics with posts missing from Tapatalk": len(
             ({p["topic_id"] for p in posts} | {topic_id for topic_id, _ in found.archive}) - known_topics),
         "topic descriptions": sum(1 for t in topics if t["description"]),
-        "polls": sum(1 for t in topics if t["poll"]),
         "attachments": len(attachments),
         "attachment files": sum(1 for a in attachments if a["data"]),
         "lite archive posts": len(found.archive),

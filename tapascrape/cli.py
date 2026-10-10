@@ -317,6 +317,18 @@ def cmd_metanet_import(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_metanet_polls(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from tapascrape.boards.metanet.polls import import_polls
+
+    with open_database(args.db) as db:
+        db.create_schema()
+        report = import_polls(db, Path(args.dump), refresh=args.refresh)
+    print_report_counts(report)
+    return 0
+
+
 def cmd_metanet_link(args: argparse.Namespace) -> int:
     from tapascrape.boards.metanet.link import link
 
@@ -555,6 +567,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("dump", help="the dump's folder (with index.php_* pages and a/)")
     p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
     p.set_defaults(func=cmd_metanet_import)
+    p = metanet.add_parser("polls", help="read the dump's polls into forumer_polls, and flag the "
+                                         "topics with one (resumable); run after import-dump")
+    p.add_argument("dump", help="the dump's folder (with index.php_* pages and a/)")
+    p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
+    p.add_argument("--refresh", action="store_true", help="read the pages already read again")
+    p.set_defaults(func=cmd_metanet_polls)
     p = metanet.add_parser("link", help="map the dump's member, post and attachment ids to ours; "
                                         "store the attachment files it has")
     p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")

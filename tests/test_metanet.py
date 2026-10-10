@@ -8,6 +8,7 @@ from tapascrape.boards.metanet.dump import archive_position, is_error, kind_of, 
 from tapascrape.boards.metanet.link import increasing, link
 from tapascrape.boards.metanet.schema import TABLES
 from tapascrape.db import open_database
+from tapascrape.db.schema import TABLES_BY_NAME
 from tapascrape.net.throttle import Throttle
 
 # Trimmed from real pages of the dump (people made up).
@@ -169,7 +170,67 @@ def test_lists():
              "<br /><span class='desc'>Tears, tantrums</span></td>")
     assert parse.forum_topics(forum) == [{"topic_id": 5000, "started_at": datetime(2005, 9, 28, 19, 49),
                                           "title": 'The "Leavers" Thread', "description": "Tears, tantrums",
-                                          "pinned": True}]
+                                          "pinned": True, "poll": False}]
+    assert [row["poll"] for row in parse.forum_topics(FORUM_PAGE)] == [True, True, False]
+
+
+FORUM_PAGE = """<html><body>
+<tr>
+  <td align='center' class='row4'><img src='x.gif' border='0'  alt='Poll' /></td>
+  <td class='row4'>
+    Poll:   <a href="http://metanet.2.forumer.com/index.php?showtopic=5031" title="This topic was started: February 20, 2006 10:58 pm">Jelly</a>
+    <br /><span class='desc'>Choose Wisely&#33;</span></td>
+</tr>
+<tr>
+  <td align='center' class='row4'><img src='y.gif' border='0'  alt='No new votes' /></td>
+  <td class='row4'>
+    <a href="http://metanet.2.forumer.com/index.php?showtopic=24036" title="This topic was started: March 1, 2008 10:58 pm">Yea or Nay</a>
+    <br /><span class='desc'></span></td>
+</tr>
+<tr>
+  <td align='center' class='row4'><img src='z.gif' border='0'  alt='No New Posts' /></td>
+  <td class='row4'>
+    <a href="http://metanet.2.forumer.com/index.php?showtopic=7000" title="This topic was started: March 2, 2008 10:58 pm">Plain</a>
+    <br /><span class='desc'></span></td>
+</tr>
+Powered by forumer.com</body></html>"""
+
+
+def test_import_polls(db, tmp_path):
+    from tapascrape.boards.metanet.polls import STATE_PREFIX, import_polls
+    dump = tmp_path / "dump"
+    dump.mkdir()
+    (dump / "index.php_showforum=5").write_text(FORUM_PAGE, encoding="cp1252")
+    (dump / "index.php_showtopic=5031").write_text(TOPIC_PAGE, encoding="cp1252")
+    older = TOPIC_PAGE.replace("<b>10</b>", "<b>7</b>").replace("Total Votes: 15", "Total Votes: 12")
+    (dump / "index.php_s=1&showtopic=5031").write_text(older, encoding="cp1252")
+    db.upsert_many("topics", [{"id": 7000, "forum_id": 5, "name": "Plain", "stickied": False, "locked": False}])
+    db.upsert_many("forumer_topics", [{"id": 24036, "title": "Yea or Nay", "in_tapatalk": False}])
+    report = import_polls(db, dump)
+    assert db.query("SELECT id, has_poll, in_tapatalk FROM forumer_topics ORDER BY id") == [
+        (5031, 1, 0), (7000, 0, 1), (24036, 1, 0)]
+    # the copy with the most votes (the latest) is kept
+    assert db.query("SELECT topic_id, title, vote_count, option_count, max_options, options, source_file "
+                    "FROM forumer_polls") == [
+        (5031, "Which is better, jelly or jam?", 15, 2, None,
+         '[{"text": "Jelly", "votes": 5}, {"text": "Jam", "votes": 10}]', "index.php_showtopic=5031")]
+    assert report["topics with a poll"] == 2 and report["polls without results (topic page not saved)"] == 1
+    assert len(db.states(STATE_PREFIX)) == 3
+    # resumable: what was read isn't read again, and an older copy found later doesn't win
+    (dump / "index.php_s=2&showtopic=5031").write_text(older, encoding="cp1252")
+    report = import_polls(db, dump)
+    assert report["files already read"] == 3 and report["files: topic"] == 1
+    assert db.query("SELECT vote_count FROM forumer_polls") == [(15,)]
+
+
+def test_dropped_column_is_migrated():
+    with open_database(":memory:") as db:
+        db.execute("CREATE TABLE forumer_topics (id INTEGER NOT NULL, title TEXT, poll TEXT, PRIMARY KEY (id))")
+        db.execute("INSERT INTO forumer_topics VALUES (1, 'x', '{}')")
+        db.create_schema(TABLES)
+        db.create_schema(TABLES)
+        assert db.query("SELECT id, title, has_poll FROM forumer_topics") == [(1, "x", None)]
+        assert "poll" not in db.existing_columns(TABLES_BY_NAME["forumer_topics"])
 
 
 def test_dump_names():

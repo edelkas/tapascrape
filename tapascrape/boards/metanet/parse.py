@@ -9,7 +9,6 @@ Displayed times are UTC: they match the Tapatalk timestamps to the minute.
 """
 
 import html
-import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -189,9 +188,12 @@ def _author(block: str) -> Author:
     return author
 
 
+POLL_START = "Template Part: poll_header"
+
+
 def poll(page: str) -> dict | None:
     """{"question", "options": [[option, votes]...], "votes"} of a topic's poll, if shown."""
-    start = page.find("Template Part: poll_header")
+    start = page.find(POLL_START)
     if start < 0:
         return None
     end = page.find("Template Part: ShowPoll_footer", start)
@@ -204,10 +206,6 @@ def poll(page: str) -> dict | None:
     total = re.search(r"Total Votes: (\d+)", section)
     return {"question": text(question.group(1)) if question else None, "options": options,
             "votes": int(total.group(1)) if total else None}
-
-
-def poll_json(value: dict | None) -> str | None:
-    return json.dumps(value, ensure_ascii=False) if value else None
 
 
 # -- profiles (showuser) ------------------------------------------------------------
@@ -269,6 +267,7 @@ def member_list(page: str) -> list[dict]:
 
 # -- forum listings (showforum / act=SF) --------------------------------------------
 
+POLL_ICON = re.compile(r"alt=['\"](?:Poll|No new votes)['\"]")  # (no) new votes since your visit
 TOPIC_ROW = re.compile(
     r"showtopic=(\d+)['\"][^>]*?title=['\"]This topic was started: ([^'\"]*)['\"][^>]*>(.*?)</a>"
     r"((?:(?!This topic was started).)*?)<span class='desc'>(.*?)</span>", re.S)
@@ -278,10 +277,12 @@ def forum_topics(page: str) -> list[dict]:
     """Topics listed on a forum page, with their descriptions."""
     found = []
     for match in TOPIC_ROW.finditer(page):
-        before = page[max(0, match.start() - 300):match.start()]
+        row = page[max(0, match.start() - 1000):match.start()].rsplit("<tr", 1)[-1]
+        cell = row.rsplit("<td", 1)[-1]  # the title's, with its "Pinned:" or "Poll:" prefix
         found.append({"topic_id": int(match.group(1)), "started_at": parse_datetime(match.group(2)),
                       "title": text(match.group(3)), "description": text(match.group(5)),
-                      "pinned": "Pinned:" in before.rsplit("<td", 1)[-1]})
+                      "pinned": "Pinned:" in cell,
+                      "poll": "Poll:" in cell or POLL_ICON.search(row) is not None})
     return found
 
 

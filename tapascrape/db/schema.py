@@ -36,6 +36,7 @@ class Table:
     primary_key: tuple[str, ...]
     indexes: tuple[Index, ...] = ()
     renamed: tuple[tuple[str, str], ...] = ()  # (old name, new name) of renamed columns
+    dropped: tuple[str, ...] = ()  # columns older versions had, removed from existing tables
 
     @property
     def column_names(self) -> list[str]:
