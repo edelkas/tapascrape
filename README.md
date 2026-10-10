@@ -159,7 +159,7 @@ Author and date alone aren't enough when the quote is long enough to compare and
 |---|---|
 | `index.html` | the forum tree |
 | `f/<id>.html` | a forum: its subforum tree, then its topics |
-| `t/<id>.html` | a topic: every post, oldest first, each anchored as `#p<post id>` |
+| `t/<id>.html` | a topic: its poll, if any, then every post, oldest first, each anchored as `#p<post id>` |
 | `users.html` | every user, by id: name, rank, join and last-active times, post count, first and last post |
 | `u/<id>.html` | a user: avatar, id, name, rank, groups, join and last-active times, post count, first and last post, signature (empty fields are left out) |
 | `u/<id>-posts.html` | all of a user's posts, oldest first, shown as on topic pages (linked from their post count) |
@@ -168,7 +168,8 @@ Author and date alone aren't enough when the quote is long enough to compare and
 There's one page per forum, topic and user, with no pagination. Every page starts with the board's name (`--title`), a line of shortcuts to the board-wide pages (for now, the users list), and the breadcrumbs down to it.
 
 - **Forum tables.** A forum's subforums are shown as a tree, nested levels indented. Each level is sorted by latest post: the forum's own, or a subforum's, whichever is newer. Each row shows the forum's own topic, post and view counts and its own last post.
-- **Topic tables.** Topics are sorted by last post, with stickies first. The flags column shows `S` for a sticky and `L` for a locked topic.
+- **Topic tables.** Topics are sorted by last post, with stickies first. The flags column shows `S` for a sticky, `L` for a locked topic and `P` for a topic with a poll; hovering its header explains them.
+- **Polls** are shown above the topic's posts, as plain text: the question, the total votes (and how many options members could pick, when more than one), then each option with its votes. A topic known to have a poll whose results weren't fetched says so.
 - **Times.** All times are UTC, in ISO 8601.
 
 Everything is plain text except post bodies and signatures, which are rendered from their BBCode (`source_fixed`, else `source`, else the API's HTML turned back into BBCode).
@@ -252,8 +253,9 @@ Images are checked to be images. Outcomes are recorded as `forumer-avatar:<old i
 - **Guest posts** show the name forumer showed for them.
 - **Links to old post ids** (`[ts:topic … old_post=N]`) point at that post. Smileys are titled with the code members typed for them.
 - **Links to NUMA** (`numa.notdot.net`, now dead) go to its new home, `https://www.nmaps.net`, with the same path, keeping their text. Map pages lose their `/map` (`/map/85674` → `/85674`), and author searches become queries (`browse?sort=created&author=X` → `browse?sort=created&q=author:X`, other parameters kept). Images (`[img]`) are left alone.
+- **Polls** from the dump (`forumer_polls`, filled by `metanet polls`). A poll only Tapatalk or only the dump has is shown as it is. When both have it, the copy with the most votes is shown, normally Tapatalk's, the later snapshot. Topics the dump shows a poll for get the `P` flag, even when the results weren't saved.
 
-Polls aren't shown yet. The profile fields are personal data, as noted above, so mind them before publishing the site.
+The profile fields are personal data, as noted above, so mind them before publishing the site.
 
 ## Login
 

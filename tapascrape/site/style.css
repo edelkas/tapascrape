@@ -96,3 +96,13 @@ table.profile th { background: var(--panel); white-space: nowrap; }
 .signature { margin-top: 6px; padding-top: 4px; border-top: 1px solid var(--border); }
 
 .empty, .guest { color: var(--muted); }
+th.flags { cursor: help; }
+
+/* -- polls (above a topic's posts) ------------------------------------------ */
+
+.poll { margin-bottom: 6px; padding: 3px 6px; border: 1px solid var(--border); background: var(--quote); }
+.poll-title { font-weight: bold; }
+.poll-note { color: var(--muted); }
+table.poll-options { border-collapse: collapse; margin-top: 2px; }
+table.poll-options td { padding: 0 5px 0 0; }
+table.poll-options td.count { text-align: right; padding-left: 10px; }

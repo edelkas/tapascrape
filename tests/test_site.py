@@ -79,11 +79,17 @@ def test_build_site(tmp_path):
                                   {"id": 3, "parent_id": 1, "name": "New", "last_post_id": 13}])
         db.upsert_many("topics", [
             {"id": 5, "forum_id": 2, "user_id": 1, "name": "First", "stickied": False, "locked": True,
-             "created_at": "2006-01-01 10:00:00", "post_count": 2, "view_count": 9, "last_post_id": 11},
+             "created_at": "2006-01-01 10:00:00", "post_count": 2, "view_count": 9, "last_post_id": 11,
+             "has_poll": None},
             {"id": 6, "forum_id": 3, "user_id": 2, "name": "Recent", "stickied": False, "locked": False,
-             "created_at": "2007-01-01 10:00:00", "post_count": 1, "view_count": 1, "last_post_id": 13},
+             "created_at": "2007-01-01 10:00:00", "post_count": 1, "view_count": 1, "last_post_id": 13,
+             "has_poll": True},
             {"id": 7, "forum_id": 3, "user_id": 2, "name": "Sticky <old>", "stickied": True, "locked": False,
-             "created_at": "2005-01-01 10:00:00", "post_count": 1, "view_count": 1, "last_post_id": 12}])
+             "created_at": "2005-01-01 10:00:00", "post_count": 1, "view_count": 1, "last_post_id": 12,
+             "has_poll": True}])  # its poll wasn't fetched
+        db.upsert_many("polls", [{"topic_id": 6, "title": "Best drone?", "vote_count": 1234, "option_count": 2,
+                                  "max_options": 2, "options": '[{"text": "Zap &amp; laser", "votes": 1000}, '
+                                                               '{"text": "Gauss", "votes": 234}]'}])
         db.upsert_many("posts", [
             {"id": 10, "topic_id": 5, "user_id": 1, "index": 1, "timestamp": "2006-01-01 10:00:00",
              "content": "", "source": "x", "source_fixed": "Hello [ts:smiley=1]"},
@@ -110,7 +116,17 @@ def test_build_site(tmp_path):
     assert '<span class="indent"></span><a href="f/3.html">New</a>' in index
     forum = (tmp_path / "f" / "3.html").read_text(encoding="utf-8")
     assert forum.index("t/7.html") < forum.index("t/6.html")  # stickies first
-    assert "Sticky &lt;old&gt;" in forum and '<td class="flags">S&nbsp;</td>' in forum
+    assert "Sticky &lt;old&gt;" in forum and '<td class="flags">S&nbsp;P</td>' in forum
+    assert '<td class="flags">&nbsp;&nbsp;P</td>' in forum
+    assert '<th class="flags" title="S: sticky&#10;L: locked&#10;P: has a poll">Flags</th>' in forum
+    assert '<td class="flags">&nbsp;L&nbsp;</td>' in (tmp_path / "f" / "2.html").read_text(encoding="utf-8")
+    recent = (tmp_path / "t" / "6.html").read_text(encoding="utf-8")
+    assert ('<div class="poll"><div class="poll-head">Poll: <span class="poll-title">Best drone?</span> '
+            '<span class="poll-note">(1,234 votes, up to 2 choices each)</span></div>'
+            '<table class="poll-options"><tbody><tr><td>Zap &amp; laser</td><td class="count">1,000</td></tr>'
+            '<tr><td>Gauss</td><td class="count">234</td></tr></tbody></table></div>') in recent
+    assert recent.index('class="poll"') < recent.index('class="post"')
+    assert "(its results weren't archived)" in (tmp_path / "t" / "7.html").read_text(encoding="utf-8")
     assert '<a href="../index.html">Index</a> &rsaquo; <a href="../f/1.html">Category</a> &rsaquo; New' in forum
     topic = (tmp_path / "t" / "5.html").read_text(encoding="utf-8")
     assert topic.index('id="p10"') < topic.index('id="p11"')
@@ -118,7 +134,7 @@ def test_build_site(tmp_path):
     assert '<a href="../t/5.html#p10">Quote: alice, 2006-01-01T10:00:00Z</a>' in topic
     assert '<span class="author">Guest</span>' in topic
     assert "2006-01-01T10:00:00Z" in topic
-    assert "<b>html</b> only" in (tmp_path / "t" / "6.html").read_text(encoding="utf-8")
+    assert "<b>html</b> only" in recent and 'class="poll"' not in topic
     user = (tmp_path / "u" / "1.html").read_text(encoding="utf-8")
     assert '<a href="../t/5.html#p10">First</a>' in user and '<i>sig</i>' in user
     assert "2005-06-01T00:00:00Z" in user

@@ -2,7 +2,7 @@
 
     index.html          the board's forum tree
     f/<id>.html         a forum: its subforum tree, then its topics
-    t/<id>.html         a topic: every post, oldest first (anchors #p<post id>)
+    t/<id>.html         a topic: its poll, then every post, oldest first (anchors #p<post id>)
     users.html          every user (linked from every page's header)
     u/<id>.html         a user's profile
     u/<id>-posts.html   all their posts, oldest first
@@ -21,6 +21,7 @@ hooks (user_name, post_author, user_fields, post_text...) change what's shown.
 """
 
 import html
+import json
 import logging
 import re
 import shutil
@@ -41,6 +42,7 @@ log = logging.getLogger(__name__)
 EXTENSIONS = {"image/gif": ".gif", "image/png": ".png", "image/jpeg": ".jpg", "image/bmp": ".bmp",
               "image/webp": ".webp"}
 UNSAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
+FLAGS_HELP = "S: sticky&#10;L: locked&#10;P: has a poll"  # the topic tables' Flags column, as a tooltip
 
 
 # -- model ---------------------------------------------------------------------------------------
@@ -79,6 +81,20 @@ class Topic:
     last_post_id: int | None
     description: str | None = None
     first_post_id: int | None = None  # set by link_model
+    has_poll: bool = False            # also set by link_model, for topics with a poll in Board.polls
+
+
+@dataclass
+class Poll:
+    title: str | None
+    vote_count: int | None
+    max_options: int | None          # how many options a member could pick; None: unknown
+    options: list[tuple[str, int]]   # (text, votes), in order
+
+    @classmethod
+    def from_row(cls, title, vote_count, max_options, options) -> "Poll":
+        return cls(title, vote_count, max_options,
+                   [(o.get("text") or "", o.get("votes") or 0) for o in json.loads(options or "[]")])
 
 
 @dataclass
@@ -131,6 +147,7 @@ class Board:
     users: dict[int, User] = field(default_factory=dict)
     posts: dict[int, PostRef] = field(default_factory=dict)
     quotes: dict[tuple[int, int], int] = field(default_factory=dict)  # (post, position) -> quoted post
+    polls: dict[int, Poll] = field(default_factory=dict)  # topic id -> its poll
     smilies: dict[int, Linked] = field(default_factory=dict)
     attachments: dict[int, Linked] = field(default_factory=dict)
 
@@ -226,9 +243,13 @@ class SiteBuilder:
                                  "last_post_id FROM forums"):
             board.forums[row[0]] = Forum(*row[:3], row[3] or "", *row[4:])
         for row in self.db.query("SELECT id, forum_id, user_id, name, stickied, locked, created_at, "
-                                 "post_count, view_count, last_post_id FROM topics"):
-            topic = Topic(*row[:4], bool(row[4]), bool(row[5]), as_datetime(row[6]), *row[7:])
+                                 "post_count, view_count, last_post_id, has_poll FROM topics"):
+            topic = Topic(*row[:4], bool(row[4]), bool(row[5]), as_datetime(row[6]), *row[7:10])
+            topic.has_poll = bool(row[10])
             board.topics[topic.id] = topic
+        for topic_id, *poll in self.db.query(
+                "SELECT topic_id, title, vote_count, max_options, options FROM polls"):
+            board.polls[topic_id] = Poll.from_row(*poll)
         for row in self.db.query(f"SELECT id, topic_id, user_id, timestamp, {q('index')} FROM posts"):
             board.posts[row[0]] = PostRef(row[0], row[1], row[2], as_datetime(row[3]), row[4])
         for row in self.db.query("SELECT id, name, rank, joined_at, last_active_at, post_count, "
@@ -256,6 +277,7 @@ class SiteBuilder:
             parent = board.forums.get(forum.parent_id)
             (parent.children if parent else board.roots).append(forum)
         for topic in board.topics.values():
+            topic.has_poll = topic.has_poll or topic.id in board.polls
             if topic.forum_id in board.forums:
                 board.forums[topic.forum_id].topics.append(topic)
         for user in board.users.values():
@@ -435,7 +457,8 @@ class SiteBuilder:
                          reverse=True)
         rows = []
         for topic in ordered:
-            flags = ("S" if topic.stickied else "&nbsp;") + ("L" if topic.locked else "&nbsp;")
+            flags = "".join(flag if on else "&nbsp;" for flag, on in
+                            (("S", topic.stickied), ("L", topic.locked), ("P", topic.has_poll)))
             description = f'<td class="description">{plain(topic.description)}</td>' if described else ""
             rows.append(
                 f'<tr id="t{topic.id}"><td class="id"><a href="{root}f/{topic.forum_id}.html#t{topic.id}">'
@@ -446,7 +469,8 @@ class SiteBuilder:
                 f'<td class="count">{number(topic.post_count)}</td><td class="count">{number(topic.view_count)}</td>'
                 f'{self.last_post_cells(topic.last_post_id, root)}</tr>')
         description_head = "<th>Description</th>" if described else ""
-        return (f'<table class="topics"><thead><tr><th>ID</th><th>Flags</th><th>Topic</th>{description_head}'
+        return (f'<table class="topics"><thead><tr><th>ID</th><th class="flags" title="{FLAGS_HELP}">Flags</th>'
+                f'<th>Topic</th>{description_head}'
                 '<th>Started by</th><th>Started</th><th>Posts</th><th>Views</th><th>Last post by</th>'
                 '<th>Last post</th></tr></thead><tbody>\n' + "\n".join(rows) + "\n</tbody></table>")
 
@@ -509,6 +533,22 @@ class SiteBuilder:
                        f'<div class="post-body">{body}</div></div>')
         return out
 
+    def poll_block(self, topic: Topic | None) -> str:
+        """A topic's poll, above its posts: the question, then each option's votes."""
+        poll = self.board.polls.get(topic.id) if topic else None
+        if poll is None:
+            return ('<div class="poll"><div class="poll-head">Poll <span class="poll-note">'
+                    "(its results weren't archived)</span></div></div>" if topic and topic.has_poll else "")
+        votes = poll.vote_count if poll.vote_count is not None else sum(v for _, v in poll.options)
+        notes = [f"{number(votes)} vote{'' if votes == 1 else 's'}"]
+        if poll.max_options and poll.max_options > 1:
+            notes.append(f"up to {poll.max_options} choices each")
+        rows = "".join(f'<tr><td>{plain(text)}</td><td class="count">{number(count)}</td></tr>'
+                       for text, count in poll.options)
+        return (f'<div class="poll"><div class="poll-head">Poll: <span class="poll-title">{plain(poll.title)}'
+                f'</span> <span class="poll-note">({", ".join(notes)})</span></div>'
+                f'<table class="poll-options"><tbody>{rows}</tbody></table></div>')
+
     def write_topic(self, topic_id: int, posts: list[PostRef]) -> None:
         root = "../"
         out = self.post_blocks(posts, "topic_id", topic_id, root)
@@ -516,6 +556,7 @@ class SiteBuilder:
         name = topic.name if topic else f"Topic {topic_id}"
         crumbs = self.crumbs(topic.forum_id if topic else None) + [(None, name)]
         body = "\n".join(out) or '<p class="empty">No posts of this topic were archived.</p>'
+        body = self.poll_block(topic) + body
         self.write(f"t/{topic_id}.html", root, crumbs, body, f"{name} - {self.board.title}")
 
     def write_user(self, user: User) -> None:

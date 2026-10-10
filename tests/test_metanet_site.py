@@ -39,7 +39,16 @@ def test_metanet_site(tmp_path):
         db.upsert_many("forumer_topics", uniform([
             {"id": 5, "forum_id": 7, "title": "Kept", "description": "still here", "in_tapatalk": True},
             {"id": 9, "forum_id": 40, "title": "Lost comic", "description": "drawn", "in_tapatalk": False},
-            {"id": 8, "forum_id": 19, "title": "Only listed", "description": None, "in_tapatalk": False}]))
+            {"id": 8, "forum_id": 19, "title": "Only listed", "description": None, "in_tapatalk": False,
+             "has_poll": True}]))
+        db.upsert_many("polls", [{"topic_id": 5, "title": "Newer", "vote_count": 10, "option_count": 1,
+                                  "max_options": 1, "options": '[{"text": "Yes", "votes": 10}]'}])
+        db.upsert_many("forumer_polls", [
+            {"topic_id": 5, "title": "Older", "vote_count": 8, "option_count": 1, "max_options": None,
+             "options": '[{"text": "Yes", "votes": 8}]', "source_file": "index.php_showtopic=5"},
+            {"topic_id": 9, "title": "Yea or Nay", "vote_count": 43, "option_count": 2, "max_options": None,
+             "options": '[{"text": "Yea", "votes": 33}, {"text": "Nay", "votes": 10}]',
+             "source_file": "index.php_showtopic=9"}])
         db.upsert_many("forumer_members", uniform([
             {"old_id": 1, "name": "bobby_shaftoe", "user_id": 9370595, "location": "Here",
              "group_name": "Members", "title": "Advanced Member",
@@ -70,17 +79,23 @@ def test_metanet_site(tmp_path):
     assert '<a href="../f/19.html">N Images</a>' in read("f/64.html")  # in its category
     webcomics = read("f/40.html")
     assert "Lost comic" in webcomics and '<td class="description">drawn</td>' in webcomics
+    assert '<td class="flags">&nbsp;&nbsp;P</td>' in webcomics  # from its forumer poll
+    assert '<td class="flags">&nbsp;&nbsp;P</td>' in read("f/19.html")  # flagged by the dump
+    assert "(its results weren't archived)" in read("t/8.html")
     assert "No posts of this topic were archived." in read("t/8.html")
     assert "Only listed</a></td><td class=\"description\"></td><td></td>" in read("f/19.html")  # starter unknown
 
     lost = read("t/9.html")
     assert lost.index('id="o501"') < lost.index('id="o502"') < lost.index('id="o503"')
     assert '<a class="id" href="../t/9.html#o501">#501 (forumer)</a>' in lost
+    assert ('Poll: <span class="poll-title">Yea or Nay</span> <span class="poll-note">(43 votes)</span>'
+            in lost and '<tr><td>Nay</td><td class="count">10</td></tr>' in lost)
     assert "a <b>comic</b>" in lost and "files/attachments/f501-0-comic.png" in lost
     assert '<a href="../u/9370595.html">bobby_shaftoe</a>' in lost  # the id-named account, named
     assert '<a href="../u/f2.html">Ghost</a>' in lost and 'passerby <span class="guest">(guest)</span>' in lost
     kept = read("t/5.html")
     assert '<a href="../t/9.html#o501">that</a>' in kept
+    assert "Newer" in kept and "Older" not in kept  # the copy with the most votes
     assert '<a href="https://www.nmaps.net/85674">Eloppp</a>' in kept
     assert '<a href="https://www.nmaps.net/">http://numa.notdot.net/</a>' in kept
 

@@ -12,6 +12,8 @@
 - Guest posts show the name forumer showed for them.
 - Links to old post ids ([ts:topic ... old_post=N]) point at that post.
 - Smileys are titled with the code members typed for them.
+- Polls the dump has (forumer_polls) when Tapatalk lacks them, or when the
+  dump's copy has more votes; topics the dump shows a poll for get the P flag.
 - Links to NUMA (numa.notdot.net, dead) go to its new home, nmaps.net
   (numa_url); their text stays as written.
 """
@@ -28,7 +30,7 @@ from tapascrape.content.smilies import normalize_url
 from tapascrape.db.base import Database
 from tapascrape.net.wayback import image_type
 from tapascrape.parse.bbcode import html_to_bbcode
-from tapascrape.site.build import (EXTENSIONS, BoardLinks, Forum, PostRef, SiteBuilder, Topic, User,
+from tapascrape.site.build import (EXTENSIONS, BoardLinks, Forum, Poll, PostRef, SiteBuilder, Topic, User,
                                    as_datetime, number, plain)
 from tapascrape.site.render import escape, safe_url
 
@@ -111,6 +113,7 @@ class MetanetSite(SiteBuilder):
         self.load_members()
         self.load_posts()
         self.load_topics()
+        self.load_polls()
         self.fix_context = load_context(self.db)  # links to the topics and forums added too
         self.fix_context.topics |= set(self.board.topics)
         self.fix_context.forums |= set(self.board.forums)
@@ -198,14 +201,15 @@ class MetanetSite(SiteBuilder):
         for post, _ in self.lost_posts:
             lost[post.topic_id].append(post)
         known = set()
-        for topic_id, forum_id, title, description, started_at, pinned in self.db.query(
-                "SELECT id, forum_id, title, description, started_at, pinned FROM forumer_topics"):
+        for topic_id, forum_id, title, description, started_at, pinned, has_poll in self.db.query(
+                "SELECT id, forum_id, title, description, started_at, pinned, has_poll FROM forumer_topics"):
             known.add(topic_id)
             if topic_id in board.topics:
                 board.topics[topic_id].description = description or None
-                continue
-            board.topics[topic_id] = self.lost_topic(topic_id, forum_id, title, description,
-                                                     as_datetime(started_at), bool(pinned), lost[topic_id])
+            else:
+                board.topics[topic_id] = self.lost_topic(topic_id, forum_id, title, description,
+                                                         as_datetime(started_at), bool(pinned), lost[topic_id])
+            board.topics[topic_id].has_poll = board.topics[topic_id].has_poll or bool(has_poll)
         for topic_id in lost.keys() - known:
             board.topics[topic_id] = self.lost_topic(topic_id, None, None, None, None, False, lost[topic_id])
         # forums Tapatalk lacks: their counts and last post, from what the dump has
@@ -215,6 +219,16 @@ class MetanetSite(SiteBuilder):
             forum.post_count = sum(t.post_count or 0 for t in topics)
             lasts = [t.last_post_id for t in topics if t.last_post_id is not None]
             forum.last_post_id = max(lasts, key=self.last_time, default=None)
+
+    def load_polls(self) -> None:
+        """The dump's polls: kept when Tapatalk lacks the poll, or its copy has fewer votes
+        (the dump's would then be the later snapshot)."""
+        polls = self.board.polls
+        for topic_id, *row in self.db.query(
+                "SELECT topic_id, title, vote_count, max_options, options FROM forumer_polls"):
+            poll = Poll.from_row(*row)
+            if topic_id not in polls or (poll.vote_count or 0) > (polls[topic_id].vote_count or 0):
+                polls[topic_id] = poll
 
     def lost_topic(self, topic_id, forum_id, title, description, started_at, pinned, posts) -> Topic:
         first, last = (posts[0], posts[-1]) if posts else (None, None)
