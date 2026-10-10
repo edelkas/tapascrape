@@ -17,7 +17,7 @@ MEMBER_POST = """<!--Begin Msg Number 388658-->
     <tr>
       <td valign='middle' class='row4' width="1%"><a name='entry388658'></a><span class='normalname'><a href='http://metanet.2.forumer.com/index.php?showuser=5765'>ninja&#33;</a></span></td>
         <td class='row4' valign='top' width="99%">
-        <span class='postdetails'><b><a title="Show the link to this post" href="#" onclick="link_to_post(388658); return false;" style="text-decoration:underline">Posted:</a></b> August 26, 2007 08:59 am</span>
+        <img src='style_images/Invision_Power_Board/icon14.gif' alt='' />&nbsp;&nbsp;<span class='postdetails'><b><a title="Show the link to this post" href="#" onclick="link_to_post(388658); return false;" style="text-decoration:underline">Posted:</a></b> August 26, 2007 08:59 am</span>
         <a href='http://metanet.2.forumer.com/index.php?act=Post&amp;CODE=06&amp;f=19&amp;t=19141&amp;p=388658'><img src='q.png' alt='Quote Post' /></a>
       </td>
     </tr>
@@ -100,6 +100,8 @@ def test_topic_page():
     assert (member.edited_by, member.edited_at) == ("ninja!", datetime(2007, 8, 27, 22, 0))
     assert member.attachments == [parse.Attached("file", 388658, "N_side_scroller.zip", 2709)]
     assert member.signature == "my <b>sig</b>"
+    assert (member.icon, guest.icon) == (parse.QUESTION_ICON, None)
+    assert parse.first_icon(TOPIC_PAGE) == parse.QUESTION_ICON
     assert (guest.author.member_id, guest.author.name) == (None, "visitor")
     assert guest.posted_at == datetime(2005, 10, 2, 4, 8)
     assert guest.html == "I actually opt for jam"
@@ -170,8 +172,9 @@ def test_lists():
              "<br /><span class='desc'>Tears, tantrums</span></td>")
     assert parse.forum_topics(forum) == [{"topic_id": 5000, "started_at": datetime(2005, 9, 28, 19, 49),
                                           "title": 'The "Leavers" Thread', "description": "Tears, tantrums",
-                                          "pinned": True, "poll": False}]
-    assert [row["poll"] for row in parse.forum_topics(FORUM_PAGE)] == [True, True, False]
+                                          "pinned": True, "poll": False, "icon": None}]
+    assert [(row["poll"], row["icon"]) for row in parse.forum_topics(FORUM_PAGE)] == [
+        (True, None), (True, None), (False, parse.ALERT_ICON)]
 
 
 FORUM_PAGE = """<html><body>
@@ -189,6 +192,7 @@ FORUM_PAGE = """<html><body>
 </tr>
 <tr>
   <td align='center' class='row4'><img src='z.gif' border='0'  alt='No New Posts' /></td>
+  <td align='center' class='row2'><img src="style_images/Invision_Power_Board/icon13.gif" border="0" alt="" /></td>
   <td class='row4'>
     <a href="http://metanet.2.forumer.com/index.php?showtopic=7000" title="This topic was started: March 2, 2008 10:58 pm">Plain</a>
     <br /><span class='desc'></span></td>
@@ -196,8 +200,8 @@ FORUM_PAGE = """<html><body>
 Powered by forumer.com</body></html>"""
 
 
-def test_import_polls(db, tmp_path):
-    from tapascrape.boards.metanet.polls import STATE_PREFIX, import_polls
+def test_import_topic_flags(db, tmp_path):
+    from tapascrape.boards.metanet.topic_flags import OLD_PREFIX, STATE_PREFIX, import_topic_flags
     dump = tmp_path / "dump"
     dump.mkdir()
     (dump / "index.php_showforum=5").write_text(FORUM_PAGE, encoding="cp1252")
@@ -206,19 +210,22 @@ def test_import_polls(db, tmp_path):
     (dump / "index.php_s=1&showtopic=5031").write_text(older, encoding="cp1252")
     db.upsert_many("topics", [{"id": 7000, "forum_id": 5, "name": "Plain", "stickied": False, "locked": False}])
     db.upsert_many("forumer_topics", [{"id": 24036, "title": "Yea or Nay", "in_tapatalk": False}])
-    report = import_polls(db, dump)
-    assert db.query("SELECT id, has_poll, in_tapatalk FROM forumer_topics ORDER BY id") == [
-        (5031, 1, 0), (7000, 0, 1), (24036, 1, 0)]
+    db.set_state(f"{OLD_PREFIX}index.php_showforum=5", "done")  # read for polls only: read again
+    report = import_topic_flags(db, dump)
+    # (the topic page's first post has the "?" icon; listings show 7000's "!")
+    assert db.query("SELECT id, has_poll, alert, question, in_tapatalk FROM forumer_topics ORDER BY id") == [
+        (5031, 1, 0, 1, 0), (7000, 0, 1, 0, 1), (24036, 1, 0, 0, 0)]
     # the copy with the most votes (the latest) is kept
     assert db.query("SELECT topic_id, title, vote_count, option_count, max_options, options, source_file "
                     "FROM forumer_polls") == [
         (5031, "Which is better, jelly or jam?", 15, 2, None,
          '[{"text": "Jelly", "votes": 5}, {"text": "Jam", "votes": 10}]', "index.php_showtopic=5031")]
-    assert report["topics with a poll"] == 2 and report["polls without results (topic page not saved)"] == 1
-    assert len(db.states(STATE_PREFIX)) == 3
+    assert report["topics flagged: has_poll"] == 2 and report["polls without results (topic page not saved)"] == 1
+    assert (report["topics flagged: alert"], report["topics flagged: question"]) == (1, 1)
+    assert len(db.states(STATE_PREFIX)) == 3 and not db.states(OLD_PREFIX)
     # resumable: what was read isn't read again, and an older copy found later doesn't win
     (dump / "index.php_s=2&showtopic=5031").write_text(older, encoding="cp1252")
-    report = import_polls(db, dump)
+    report = import_topic_flags(db, dump)
     assert report["files already read"] == 3 and report["files: topic"] == 1
     assert db.query("SELECT vote_count FROM forumer_polls") == [(15,)]
 

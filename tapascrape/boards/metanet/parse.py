@@ -88,6 +88,7 @@ class Post:
     edited_by: str | None = None
     edited_at: datetime | None = None
     attachments: list[Attached] = field(default_factory=list)
+    icon: int | None = None     # its post icon, iconN.gif by "Posted:" (see ICONS); a topic's is its first post's
 
 
 @dataclass
@@ -100,6 +101,11 @@ class TopicPage:
     posts: list[Post]
 
 
+# Post icons (style_images/<skin>/iconN.gif, N 1-14), shown by each post's date and, for a topic's
+# first post, by its title in forum listings. Two of them flag topics:
+ALERT_ICON = 13     # "!"
+QUESTION_ICON = 14  # "?"
+ICON = re.compile(r"[/'\"]icon(\d+)\.gif['\"]")
 MSG_START = re.compile(r"<!--Begin Msg Number (\d+)-->")
 QUOTE_LINK = re.compile(r"act=Post&(?:amp;)?CODE=06&(?:amp;)?f=(\d+)&(?:amp;)?t=(\d+)")
 TOPIC_LINK = re.compile(r"act=(?:Track|Forward|Print)&(?:amp;)?(?:client=\w+&(?:amp;)?)?"
@@ -126,14 +132,27 @@ def topic_page(page: str) -> TopicPage:
         end = starts[i + 1].start() if i + 1 < len(starts) else len(page)
         if (post := _post(int(start.group(1)), page[start.end():end])) is not None:
             posts.append(post)
-    topic_id = forum_id = None
-    if match := TOPIC_LINK.search(page) or QUOTE_LINK.search(page):
-        forum_id, topic_id = int(match.group(1)), int(match.group(2))
+    forum_id, topic_id = topic_of(page)
     title = description = None
     if starts and (match := TOPIC_HEADER.search(page, 0, starts[0].start())):
         title = text(match.group(1))
         description = text(match.group(2).lstrip(" ,"))
     return TopicPage(topic_id, forum_id, title, description, poll(page), posts)
+
+
+def topic_of(page: str) -> tuple[int | None, int | None]:
+    """(forum id, topic id) of a topic page, from its links."""
+    if match := TOPIC_LINK.search(page) or QUOTE_LINK.search(page):
+        return int(match.group(1)), int(match.group(2))
+    return None, None
+
+
+def first_icon(page: str) -> int | None:
+    """The post icon of a topic page's first post, without parsing the posts (see ICON)."""
+    if (start := MSG_START.search(page)) and (posted := POSTED.search(page, start.end())):
+        if icon := ICON.search(page, start.end(), posted.start()):
+            return int(icon.group(1))
+    return None
 
 
 def _post(post_id: int, block: str) -> Post | None:
@@ -154,13 +173,16 @@ def _post(post_id: int, block: str) -> Post | None:
     if edit := EDIT_NOTE.search(content):
         edited_by, edited_at = text(edit.group(1)), parse_datetime(text(edit.group(2)))
         content = content[:edit.start()] + content[edit.end():]
-    posted = text(m.group(1)) if (m := POSTED.search(block)) else None
+    posted = icon = None
+    if m := POSTED.search(block):
+        posted = text(m.group(1))
+        icon = int(i.group(1)) if (i := ICON.search(block, 0, m.start())) else None
     topic_id = forum_id = None
     if m := QUOTE_LINK.search(block):
         forum_id, topic_id = int(m.group(1)), int(m.group(2))
     signature = m.group(1).strip() if (m := SIGNATURE.search(block)) else None
     return Post(post_id, topic_id, forum_id, _author(block), posted, parse_datetime(posted),
-                content.strip(), signature or None, edited_by, edited_at, attachments)
+                content.strip(), signature or None, edited_by, edited_at, attachments, icon)
 
 
 def _author(block: str) -> Author:
@@ -282,7 +304,8 @@ def forum_topics(page: str) -> list[dict]:
         found.append({"topic_id": int(match.group(1)), "started_at": parse_datetime(match.group(2)),
                       "title": text(match.group(3)), "description": text(match.group(5)),
                       "pinned": "Pinned:" in cell,
-                      "poll": "Poll:" in cell or POLL_ICON.search(row) is not None})
+                      "poll": "Poll:" in cell or POLL_ICON.search(row) is not None,
+                      "icon": int(m.group(1)) if (m := ICON.search(row)) else None})
     return found
 
 

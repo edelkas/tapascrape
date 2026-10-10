@@ -14,6 +14,8 @@
 - Smileys are titled with the code members typed for them.
 - Polls the dump has (forumer_polls) when Tapatalk lacks them, or when the
   dump's copy has more votes; topics the dump shows a poll for get the P flag.
+- Forumer's topic icons Tapatalk lost: "!" (A, alert) and "?" (Q, question)
+  join the topic tables' flags.
 - Links to NUMA (numa.notdot.net, dead) go to its new home, nmaps.net
   (numa_url); their text stays as written.
 """
@@ -95,6 +97,7 @@ class MetanetSite(SiteBuilder):
         self.authors: dict[int, str] = {}          # post key -> the name forumer showed (guests)
         self.old_posts: dict[int, int] = {}        # old post id -> post key
         self.added_forums: set[int] = set()        # forums only the dump has
+        self.icon_flags: dict[int, set[str]] = {}  # topic id -> "A" and/or "Q", from forumer's icons
         self.signatures: list[tuple[User, str]] = []  # forumer signatures to convert
         super().__init__(db, out, title)
 
@@ -201,9 +204,12 @@ class MetanetSite(SiteBuilder):
         for post, _ in self.lost_posts:
             lost[post.topic_id].append(post)
         known = set()
-        for topic_id, forum_id, title, description, started_at, pinned, has_poll in self.db.query(
-                "SELECT id, forum_id, title, description, started_at, pinned, has_poll FROM forumer_topics"):
+        for topic_id, forum_id, title, description, started_at, pinned, has_poll, alert, question in self.db.query(
+                "SELECT id, forum_id, title, description, started_at, pinned, has_poll, alert, question "
+                "FROM forumer_topics"):
             known.add(topic_id)
+            if alert or question:
+                self.icon_flags[topic_id] = {flag for flag, on in (("A", alert), ("Q", question)) if on}
             if topic_id in board.topics:
                 board.topics[topic_id].description = description or None
             else:
@@ -301,6 +307,12 @@ class MetanetSite(SiteBuilder):
         if post.user_id not in self.board.users and post.id in self.authors:
             return f'{escape(self.authors[post.id])} <span class="guest">(guest)</span>'
         return super().post_author(post, root)
+
+    def flag_meanings(self):
+        return super().flag_meanings() + [("A", "alert (forumer's ! icon)"), ("Q", "question (forumer's ? icon)")]
+
+    def topic_flags(self, topic: Topic) -> set[str]:
+        return super().topic_flags(topic) | self.icon_flags.get(topic.id, set())
 
     def user_columns(self):
         def old_id(user: User, root: str) -> str:

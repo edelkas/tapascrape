@@ -17,7 +17,7 @@ SiteBuilder loads the board into a small model, then writes it. Boards with more
 to say (other names, extra profile fields, posts and topics from elsewhere)
 subclass it: `load` can add to the model (posts can carry their own text, an
 anchor and a label; users their own page and several avatars), and the small
-hooks (user_name, post_author, user_fields, post_text...) change what's shown.
+hooks (user_name, post_author, user_fields, topic_flags, post_text...) change what's shown.
 """
 
 import html
@@ -42,7 +42,6 @@ log = logging.getLogger(__name__)
 EXTENSIONS = {"image/gif": ".gif", "image/png": ".png", "image/jpeg": ".jpg", "image/bmp": ".bmp",
               "image/webp": ".webp"}
 UNSAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
-FLAGS_HELP = "S: sticky&#10;L: locked&#10;P: has a poll"  # the topic tables' Flags column, as a tooltip
 
 
 # -- model ---------------------------------------------------------------------------------------
@@ -457,8 +456,8 @@ class SiteBuilder:
                          reverse=True)
         rows = []
         for topic in ordered:
-            flags = "".join(flag if on else "&nbsp;" for flag, on in
-                            (("S", topic.stickied), ("L", topic.locked), ("P", topic.has_poll)))
+            on = self.topic_flags(topic)
+            flags = "".join(flag if flag in on else "&nbsp;" for flag, _ in self.flag_meanings())
             description = f'<td class="description">{plain(topic.description)}</td>' if described else ""
             rows.append(
                 f'<tr id="t{topic.id}"><td class="id"><a href="{root}f/{topic.forum_id}.html#t{topic.id}">'
@@ -469,10 +468,20 @@ class SiteBuilder:
                 f'<td class="count">{number(topic.post_count)}</td><td class="count">{number(topic.view_count)}</td>'
                 f'{self.last_post_cells(topic.last_post_id, root)}</tr>')
         description_head = "<th>Description</th>" if described else ""
-        return (f'<table class="topics"><thead><tr><th>ID</th><th class="flags" title="{FLAGS_HELP}">Flags</th>'
+        legend = "&#10;".join(f"{flag}: {html.escape(meaning)}" for flag, meaning in self.flag_meanings())
+        return (f'<table class="topics"><thead><tr><th>ID</th><th class="flags" title="{legend}">Flags</th>'
                 f'<th>Topic</th>{description_head}'
                 '<th>Started by</th><th>Started</th><th>Posts</th><th>Views</th><th>Last post by</th>'
                 '<th>Last post</th></tr></thead><tbody>\n' + "\n".join(rows) + "\n</tbody></table>")
+
+    def flag_meanings(self) -> list[tuple[str, str]]:
+        """The topic tables' flags, in column order, and what they mean (the column's tooltip)."""
+        return [("S", "sticky"), ("L", "locked"), ("P", "has a poll")]
+
+    def topic_flags(self, topic: Topic) -> set[str]:
+        """The flags a topic has (see flag_meanings)."""
+        return {flag for flag, on in (("S", topic.stickied), ("L", topic.locked), ("P", topic.has_poll))
+                if on}
 
     # -- pages ---------------------------------------------------------------------------------
 

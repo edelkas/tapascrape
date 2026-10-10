@@ -37,8 +37,10 @@ def test_metanet_site(tmp_path):
             {"id": 19, "name": "N Images", "description": None, "parent_id": None, "category": "N",
              "in_tapatalk": False}])
         db.upsert_many("forumer_topics", uniform([
-            {"id": 5, "forum_id": 7, "title": "Kept", "description": "still here", "in_tapatalk": True},
-            {"id": 9, "forum_id": 40, "title": "Lost comic", "description": "drawn", "in_tapatalk": False},
+            {"id": 5, "forum_id": 7, "title": "Kept", "description": "still here", "in_tapatalk": True,
+             "alert": True},
+            {"id": 9, "forum_id": 40, "title": "Lost comic", "description": "drawn", "in_tapatalk": False,
+             "question": True},
             {"id": 8, "forum_id": 19, "title": "Only listed", "description": None, "in_tapatalk": False,
              "has_poll": True}]))
         db.upsert_many("polls", [{"topic_id": 5, "title": "Newer", "vote_count": 10, "option_count": 1,
@@ -79,8 +81,11 @@ def test_metanet_site(tmp_path):
     assert '<a href="../f/19.html">N Images</a>' in read("f/64.html")  # in its category
     webcomics = read("f/40.html")
     assert "Lost comic" in webcomics and '<td class="description">drawn</td>' in webcomics
-    assert '<td class="flags">&nbsp;&nbsp;P</td>' in webcomics  # from its forumer poll
-    assert '<td class="flags">&nbsp;&nbsp;P</td>' in read("f/19.html")  # flagged by the dump
+    assert '<td class="flags">&nbsp;&nbsp;P&nbsp;Q</td>' in webcomics  # its forumer poll, its "?" icon
+    assert '<td class="flags">&nbsp;&nbsp;P&nbsp;&nbsp;</td>' in read("f/19.html")  # flagged by the dump
+    assert '<td class="flags">&nbsp;&nbsp;PA&nbsp;</td>' in community
+    assert ('title="S: sticky&#10;L: locked&#10;P: has a poll&#10;A: alert (forumer&#x27;s ! icon)&#10;'
+            'Q: question (forumer&#x27;s ? icon)">Flags</th>') in community
     assert "(its results weren't archived)" in read("t/8.html")
     assert "No posts of this topic were archived." in read("t/8.html")
     assert "Only listed</a></td><td class=\"description\"></td><td></td>" in read("f/19.html")  # starter unknown

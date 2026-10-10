@@ -49,7 +49,9 @@ FORUMER_TOPICS = Table("forumer_topics", (
     Column("description", TEXT),            # IPB's topic description, which Tapatalk lacks
     Column("started_at", DATETIME),
     Column("pinned", BOOL),
-    Column("has_poll", BOOL),               # NULL: never seen listed or opened (see polls)
+    Column("has_poll", BOOL),               # NULL: never seen listed or opened (see topic_flags)
+    Column("alert", BOOL),                  # its icon was "!" (NULL: never seen listed nor its first page)
+    Column("question", BOOL),               # its icon was "?" (likewise)
     Column("in_tapatalk", BOOL),            # whether `topics` has it (some never made it)
 ), primary_key=("id",), dropped=("poll",))  # the poll's JSON, now in forumer_polls
 
