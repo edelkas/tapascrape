@@ -60,7 +60,14 @@ def fetch_bytes(url: str, throttle: Throttle, timeout: float = 30.0,
 def fetch(url: str, throttle: Throttle, timeout: float = 30.0, max_retries: int = 3,
           original: bool = False, user_agent: str = USER_AGENT) -> tuple[bytes, Message] | None:
     """Like fetch_bytes, with the response headers."""
-    def attempt() -> tuple[bytes, Message] | None:
+    found = fetch_final(url, throttle, timeout, max_retries, original, user_agent)
+    return found[:2] if found is not None else None
+
+
+def fetch_final(url: str, throttle: Throttle, timeout: float = 30.0, max_retries: int = 3,
+                original: bool = False, user_agent: str = USER_AGENT) -> tuple[bytes, Message, str] | None:
+    """Like fetch, with the URL that answered (where redirects led)."""
+    def attempt() -> tuple[bytes, Message, str] | None:
         target = cache_busted(url) if original else url
         log.debug("GET %s", target)
         headers = {"User-Agent": user_agent}
@@ -72,7 +79,7 @@ def fetch(url: str, throttle: Throttle, timeout: float = 30.0, max_retries: int 
                 if original and response.headers.get("cf-polished"):
                     raise RetryableError(f"got Cloudflare's polished copy "
                                          f"({response.headers['cf-polished']})")
-                return response.read(), response.headers
+                return response.read(), response.headers, response.geturl()
         except urllib.error.HTTPError as e:
             if e.code == 429 or e.code >= 500:
                 raise RetryableError(f"HTTP {e.code}{_reason(e)}",

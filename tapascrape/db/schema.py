@@ -143,6 +143,28 @@ ATTACHMENTS = Table("attachments", (
     Column("recovered_from", TEXT),        # where `data` came from (e.g. a Wayback capture)
 ), primary_key=("id",), renamed=(("old_member_id", "old_forum_id"),))
 
+# Images embedded with [img] from other hosts (see content.images), and copies of them.
+# Ids are ours (stable once given). The site shows the copy, if there is one.
+EMBEDDED_IMAGES = Table("embedded_images", (
+    Column("id", INT, nullable=False),
+    Column("url", TEXT, nullable=False),   # as embedded, normalized (content.images.image_url)
+    Column("host", TEXT),
+    Column("used_in", TEXT),               # where it's embedded, e.g. "signatures"
+    Column("uses", INT),
+    Column("live", TEXT),                  # the original host's answer: "ok" or why not; NULL: not asked
+    Column("live_digest", TEXT),           # of the image it served (base32 SHA-1, as Wayback's CDX)
+    Column("captures", LONGTEXT),          # JSON [[timestamp, url, digest], ...]: Wayback Machine
+                                           # captures that are images, oldest first; NULL: not looked up
+    Column("status", TEXT),                # "live", "archived" or "missing"; NULL: not decided yet
+    Column("note", TEXT),                  # why: e.g. "the original host's copy differs"
+    Column("content_type", TEXT),
+    Column("size", INT),
+    Column("data", BLOB),                  # the copy kept (NULL: none)
+    Column("recovered_from", TEXT),        # where `data` came from (the URL itself, or a capture)
+    Column("captured_at", DATETIME),       # when that capture was made (archived copies)
+    Column("checked_at", DATETIME),        # when the status was decided
+), primary_key=("id",))
+
 # The [quote]s of posts and the posts they quote (see content.quotes), nested ones included.
 # Rebuilt as a whole by the `quotes` command.
 QUOTES = Table("quotes", (
@@ -175,8 +197,8 @@ CRAWL_STATE = Table("crawl_state", (
     Column("value", TEXT),
 ), primary_key=("key",))
 
-TABLES = (FORUMS, TOPICS, POSTS, USERS, AVATARS, GROUPS, GROUP_USERS, SMILIES, ATTACHMENTS, QUOTES,
-          POLLS, CRAWL_STATE)
+TABLES = (FORUMS, TOPICS, POSTS, USERS, AVATARS, GROUPS, GROUP_USERS, SMILIES, ATTACHMENTS,
+          EMBEDDED_IMAGES, QUOTES, POLLS, CRAWL_STATE)
 TABLES_BY_NAME = {t.name: t for t in TABLES}
 
 

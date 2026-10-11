@@ -1,5 +1,7 @@
 """Wayback Machine (web.archive.org) lookups for files from dead hosts."""
 
+import base64
+import hashlib
 import json
 import logging
 import urllib.parse
@@ -77,6 +79,26 @@ class Capture:
     original: str   # the URL as archived
     timestamp: str
     mimetype: str
+    digest: str = ""  # of the archived body (see payload_digest)
+
+
+def payload_digest(data: bytes) -> str:
+    """A body's digest as the CDX lists them: SHA-1, in base32."""
+    return base64.b32encode(hashlib.sha1(data).digest()).decode("ascii")
+
+
+def image_captures(url: str, throttle: Throttle, limit: int = 200) -> list[Capture]:
+    """Captures of `url` archived as images with HTTP 200, oldest first, one per run of
+    identical contents (a capture each time the file changed)."""
+    query = urllib.parse.urlencode([
+        ("url", urllib.parse.quote(url.split("://", 1)[-1], safe=URL_SAFE)), ("output", "json"),
+        ("fl", "original,timestamp,mimetype,digest"), ("filter", "statuscode:200"),
+        ("filter", "mimetype:image/.*"), ("collapse", "digest"), ("limit", str(limit)),
+    ])
+    body = fetch_bytes(f"{CDX_URL}?{query}", throttle, timeout=120, max_retries=MAX_RETRIES,
+                       user_agent=USER_AGENT)
+    rows = json.loads(body) if body and body.strip() else []
+    return [Capture(*row) for row in rows[1:] if len(row) == 4]
 
 
 def prefix_captures(prefix: str, throttle: Throttle, page_size: int = 50000,

@@ -7,8 +7,8 @@ tags still open inside it, a closing tag with nothing to close and a tag never
 closed stay literal text. Bare URLs are linked, and a line break right after an
 opening block tag or around a closing one is dropped (the board ignores those).
 
-What depends on the site (where smileys, attachments, topics and quoted posts
-are, and how they're named) is asked to a `Links` object, so boards can change
+What depends on the site (where smileys, attachments, copies of embedded
+images, topics and quoted posts are, and how they're named) is asked to a `Links` object, so boards can change
 it; everything presentational is a class name for the stylesheet. The only
 inline styles are the post's own colors, sizes and fonts.
 """
@@ -65,6 +65,10 @@ class Links:
         return None
 
     def attachment(self, attachment_id: int) -> Linked | None:
+        return None
+
+    def image(self, url: str) -> str | None:
+        """Where the site keeps a copy of an image embedded from `url`."""
         return None
 
     def topic(self, topic_id: int, attrs: dict[str, str]) -> str | None:
@@ -359,6 +363,8 @@ class Renderer:
         src = safe_url(text_of(node))
         if src is None:
             return None
+        if (copy := self.links.image(src)) is not None:
+            src = state.root + copy
         return f'<img class="bb-img" src="{attribute(src)}" alt="" loading="lazy">'
 
     def tag_code(self, node, state):

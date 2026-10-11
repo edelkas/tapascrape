@@ -6,7 +6,7 @@
     users.html          every user (linked from every page's header)
     u/<id>.html         a user's profile
     u/<id>-posts.html   all their posts, oldest first
-    files/...           smileys, attachments and avatars stored in the database
+    files/...           smileys, attachments, copies of embedded images and avatars stored in the database
     style.css           every bit of styling; edit it freely
 
 Plain HTML and CSS, no JavaScript, one page per forum/topic/user, no pagination.
@@ -31,6 +31,7 @@ from datetime import datetime
 from importlib import resources
 from pathlib import Path
 
+from tapascrape.content.images import image_url
 from tapascrape.crawl.progress import Progress
 from tapascrape.db.base import Database
 from tapascrape.net.wayback import image_type
@@ -149,6 +150,7 @@ class Board:
     polls: dict[int, Poll] = field(default_factory=dict)  # topic id -> its poll
     smilies: dict[int, Linked] = field(default_factory=dict)
     attachments: dict[int, Linked] = field(default_factory=dict)
+    images: dict[str, str] = field(default_factory=dict)  # embedded image URL -> its copy's href
 
 
 def as_datetime(value) -> datetime | None:
@@ -188,6 +190,10 @@ class BoardLinks(Links):
     def attachment(self, attachment_id):
         return self.board.attachments.get(attachment_id)
 
+    def image(self, url):
+        key = image_url(url)
+        return self.board.images.get(key) if key is not None else None
+
     def topic(self, topic_id, attrs):
         return f"t/{topic_id}.html" if topic_id in self.board.topics else None
 
@@ -217,7 +223,7 @@ class SiteBuilder:
     def build(self) -> dict[str, int]:
         self.load()
         self.link_model()
-        for sub in ("f", "t", "u", "files/smilies", "files/attachments", "files/avatars"):
+        for sub in ("f", "t", "u", "files/smilies", "files/attachments", "files/avatars", "files/images"):
             (self.out / sub).mkdir(parents=True, exist_ok=True)
         self.write_files()
         shutil.copyfile(resources.files("tapascrape.site").joinpath("style.css"), self.out / "style.css")
@@ -303,7 +309,7 @@ class SiteBuilder:
         return href
 
     def write_files(self) -> None:
-        """Smileys, attachments and avatars stored in the database -> files/."""
+        """Smileys, attachments, copies of embedded images and avatars in the database -> files/."""
         board = self.board
         for smiley_id, name, data in self.db.query("SELECT id, name, data FROM smilies"):
             href = None
@@ -313,6 +319,10 @@ class SiteBuilder:
         for attachment_id, name, content_type, data in self.db.query(
                 "SELECT id, name, content_type, data FROM attachments"):
             self.add_attachment(attachment_id, name, content_type, data, str(attachment_id))
+        for image_id, url, data in self.db.query(
+                "SELECT id, url, data FROM embedded_images WHERE data IS NOT NULL"):
+            board.images[url] = self.write_file(
+                f"files/images/{image_id}{EXTENSIONS.get(image_type(data), '')}", data)
         for user_id, data in self.db.query(
                 "SELECT u.id, a.data FROM users u JOIN avatars a ON a.id = u.avatar_id"):
             if (user := board.users.get(user_id)) is not None:

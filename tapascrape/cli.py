@@ -9,6 +9,7 @@ from tapascrape.config import BoardConfig
 from tapascrape.content.attachments import collect_attachments, recover_attachments
 from tapascrape.content.fix import (FIXES, FIXES_BY_NAME, fix_posts, fix_signatures, fix_source,
                                    load_context)
+from tapascrape.content.images import SCOPES, collect_images, image_counts, recover_images
 from tapascrape.content.quotes import link_quotes
 from tapascrape.content.scan import RULES_BY_NAME, matching_posts, print_report, scan
 from tapascrape.content.smilies import (collect_smilies, pending_smilies, recover_smilies,
@@ -278,6 +279,22 @@ def cmd_attachments(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_images(args: argparse.Namespace, texts: dict) -> int:
+    with open_database(args.db) as db:
+        db.create_schema()
+        collect_images(db, texts(db))
+        if not args.no_fetch:
+            report = recover_images(db, Throttle(args.rate), retry=args.retry, limit=args.limit)
+            print_report_counts(report)
+        for status, count, uses in image_counts(db):
+            print(f"{status:>18}: {count:,} images ({uses or 0:,} uses)")
+    return 0
+
+
+def cmd_images(args: argparse.Namespace) -> int:
+    return run_images(args, lambda db: {scope: SCOPES[scope](db) for scope in SCOPES})
+
+
 def cmd_avatars(args: argparse.Namespace) -> int:
     with open_database(args.db) as db:
         db.create_schema()
@@ -357,6 +374,12 @@ def cmd_metanet_avatars(args: argparse.Namespace) -> int:
         report = recover_avatars(db, Throttle(args.rate), retry=args.retry)
     print_report_counts(report)
     return 0
+
+
+def cmd_metanet_images(args: argparse.Namespace) -> int:
+    from tapascrape.boards.metanet.images import metanet_signature_texts
+
+    return run_images(args, lambda db: {"signatures": metanet_signature_texts(db)})
 
 
 def cmd_metanet_quotes(args: argparse.Namespace) -> int:
@@ -541,6 +564,18 @@ def build_parser() -> argparse.ArgumentParser:
                    help="look again for attachments previously found nowhere")
     p.set_defaults(func=cmd_attachments)
 
+    p = sub.add_parser("images", help="list images embedded with [img] in signatures in the "
+                                      "embedded_images table and keep copies: the original host's, "
+                                      "checked against the Wayback Machine's (resumable)")
+    p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
+    p.add_argument("--rate", type=float, default=0.2,
+                   help="max requests per second to web.archive.org (default 0.2)")
+    p.add_argument("--no-fetch", action="store_true", help="only list them; download nothing")
+    p.add_argument("--retry", action="store_true",
+                   help="look again for images previously found nowhere")
+    p.add_argument("--limit", type=int, metavar="N", help="look for at most N images this run")
+    p.set_defaults(func=cmd_images)
+
     p = sub.add_parser("avatars", help="re-download stored avatars as originals (not Cloudflare's "
                                        "recompressed copies)")
     p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
@@ -591,6 +626,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", required=True, metavar="DIR", help="folder to write it to")
     p.add_argument("--title", default="Metanet Forums", help="the board's name, atop every page")
     p.set_defaults(func=cmd_metanet_site)
+    p = metanet.add_parser("images", help="`images`, also for the forumer signatures the site shows "
+                                          "(resumable); run after import-dump and link")
+    p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
+    p.add_argument("--rate", type=float, default=0.2,
+                   help="max requests per second to web.archive.org (default 0.2)")
+    p.add_argument("--no-fetch", action="store_true", help="only list them; download nothing")
+    p.add_argument("--retry", action="store_true",
+                   help="look again for images previously found nowhere")
+    p.add_argument("--limit", type=int, metavar="N", help="look for at most N images this run")
+    p.set_defaults(func=cmd_metanet_images)
     for name, func, help, retry in (
             ("attachments", cmd_metanet_attachments,
              "recover attachments from forumer's archived act=Attach downloads (Wayback Machine); "
