@@ -1,11 +1,16 @@
+import json
+import re
 from collections import Counter
 from datetime import datetime
 
 import pytest
 
 from tapascrape.boards.metanet import parse
-from tapascrape.boards.metanet.dump import archive_position, is_error, kind_of, query_of
+from tapascrape.boards.metanet.dump import (archive_position, cdx_file_id, flat_file_id, is_error, iter_dumps,
+                                            kind_of, query_hash, query_of)
+from tapascrape.boards.metanet.importer import import_dump
 from tapascrape.boards.metanet.link import increasing, link
+from tapascrape.boards.metanet.relink import LinkRestorer
 from tapascrape.boards.metanet.schema import TABLES
 from tapascrape.db import open_database
 from tapascrape.db.schema import TABLES_BY_NAME
@@ -211,7 +216,7 @@ def test_import_topic_flags(db, tmp_path):
     db.upsert_many("topics", [{"id": 7000, "forum_id": 5, "name": "Plain", "stickied": False, "locked": False}])
     db.upsert_many("forumer_topics", [{"id": 24036, "title": "Yea or Nay", "in_tapatalk": False}])
     db.set_state(f"{OLD_PREFIX}index.php_showforum=5", "done")  # read for polls only: read again
-    report = import_topic_flags(db, dump)
+    report = import_topic_flags(db, [dump])
     # (the topic page's first post has the "?" icon; listings show 7000's "!")
     assert db.query("SELECT id, has_poll, alert, question, in_tapatalk FROM forumer_topics ORDER BY id") == [
         (5031, 1, 0, 1, 0), (7000, 0, 1, 0, 1), (24036, 1, 0, 0, 0)]
@@ -225,7 +230,7 @@ def test_import_topic_flags(db, tmp_path):
     assert len(db.states(STATE_PREFIX)) == 3 and not db.states(OLD_PREFIX)
     # resumable: what was read isn't read again, and an older copy found later doesn't win
     (dump / "index.php_s=2&showtopic=5031").write_text(older, encoding="cp1252")
-    report = import_topic_flags(db, dump)
+    report = import_topic_flags(db, [dump])
     assert report["files already read"] == 3 and report["files: topic"] == 1
     assert db.query("SELECT vote_count FROM forumer_polls") == [(15,)]
 
@@ -251,6 +256,97 @@ def test_dump_names():
     assert is_error("<title>Board Message</title> forumer")
     assert is_error("Can't connect to local MySQL server through socket")
     assert not is_error(TOPIC_PAGE)
+
+
+SESSION = "306f738a14a2e8d4a81a2ef88667c5d4"
+
+
+def rewritten(page: str) -> str:
+    """A page as StrawberryMaster's downloader saves it: the board's links hashed, non-ASCII dropped."""
+    def local(match):
+        path, _, query = match.group(3).partition("?")
+        if query:
+            return f"{match.group(1)}={match.group(2)}./index__q{query_hash(query)}.php{match.group(2)}"
+        return f"{match.group(1)}={match.group(2)}./{path or 'index.html'}{match.group(2)}"
+    page = re.sub(r"""(href|src|action)=(['"])https?://metanet\.2\.forumer\.com(?::\d+)?/?([^'"]*)\2""", local, page)
+    return re.sub(r"[^\x00-\x7f]", "", page)
+
+
+def with_session(page: str) -> str:
+    """The topic page with a real session id, which its scripts show too (and its posts its own)."""
+    return page.replace("f=19&amp;t=19141", "f=5&amp;t=5031").replace("s=4cc7", f"s={SESSION}").replace(
+        "<body>", f"<body><script>function buddy_pop() {{ window.open('index.php?act=buddy&s={SESSION}') }}</script>")
+
+
+def test_cdx_file_id():
+    assert cdx_file_id("http://metanet.2.forumer.com:80/index.php?s=&showtopic=14574") == \
+        f"index__q{query_hash('s=&showtopic=14574')}.php"
+    assert cdx_file_id("http://metanet.2.forumer.com/index.php?act%3DST%26t%3D5") == \
+        f"index__q{query_hash('act=ST&t=5')}.php"  # decoded first
+    assert cdx_file_id("http://metanet.2.forumer.com:80/a/General-Community-7/") == "a/General-Community-7"
+    assert cdx_file_id("http://metanet.2.forumer.com/a/jelly_post5031-15.html") == "a/jelly_post5031-15.html"
+    assert cdx_file_id("http://metanet.2.forumer.com:80/") == ""
+    assert flat_file_id("index.php_s=&showtopic=14574") == f"index__q{query_hash('s=&showtopic=14574')}.php"
+
+
+def test_link_restorer():
+    # the attachment links carry the page's session id, which only its scripts show otherwise
+    page = with_session(TOPIC_PAGE).replace(
+        "<body>", "<body><a href='http://metanet.2.forumer.com/index.php?showtopic=4000&amp;view=findpost&amp;p=1'>lost</a>"
+        "<a href='http://metanet.2.forumer.com/index.php?showtopic=4000&amp;view=findpost&amp;p=2'>"
+        "http://metanet.2.forumer.com/index.php?showtopic=4000&amp;view=findpost&amp;p=2</a>"
+        "<a href='http://metanet.2.forumer.com'>home</a><img src='http://metanet.2.forumer.com/style_images/x.gif'>")
+    restorer = LinkRestorer([])
+    restored = restorer.restore(rewritten(page), {"showtopic": "5031"})
+    # a link pasted in a post is restored when its text shows it; one that can't be points at the board
+    assert restored == page.replace("index.php?showtopic=4000&amp;view=findpost&amp;p=1'", "index.php'").replace(
+        "forumer.com'>home", "forumer.com/'>home")
+    assert restorer.counts == Counter({"links restored": 6, "links not restored": 1})
+    assert parse.topic_page(restored) == parse.topic_page(page)
+
+
+def test_two_dumps(db, tmp_path):
+    flat, hashed = tmp_path / "forumer_wayback_machine", tmp_path / "forumer_new_dump"
+    flat.mkdir()
+    hashed.mkdir()
+    page = with_session(TOPIC_PAGE).replace("Hello", "Héllo")
+    (flat / "index.php_showtopic=5031").write_text(page, encoding="cp1252")
+    # the new dump: the same page (read from the flat dump, dated by the new one), and a later
+    # copy of the topic's page where the member's post lost its accent and went through a word
+    # filter, and the guest's was edited
+    later = rewritten(page.replace("Hello", "Burrito").replace(
+        "I actually opt for jam", "I actually opt for jelly now<br /><br /><span class='edit'>This post has been "
+        "edited by <b>visitor</b> on October 03, 2005 10:00 am</span>"))
+    (hashed / "index__q00000000old.php").write_text(rewritten(page), encoding="utf-8")
+    (hashed / f"index__q{query_hash('showtopic=5031&st=0')}.php").write_text(later, encoding="utf-8")
+    # ... and an earlier capture, lossy too: the flat dump's copy still wins over it
+    (hashed / f"index__q{query_hash('showtopic=5031&st=15')}.php").write_text(rewritten(page), encoding="utf-8")
+    (hashed / ".cdx.json").write_text(json.dumps([
+        ["20070901000000", "http://metanet.2.forumer.com:80/index.php?showtopic=5031"],
+        ["20070101000000", "http://metanet.2.forumer.com:80/index.php?showtopic=5031"],
+        ["20080101000000", "http://metanet.2.forumer.com:80/index.php?showtopic=5031&st=0"],
+        ["20060101000000", "http://metanet.2.forumer.com:80/index.php?showtopic=5031&st=15"]]), encoding="utf-8")
+    (hashed / ".downloaded.txt").write_text(f"{flat_file_id('index.php_showtopic=5031')}\n"
+                                            f"index__q{query_hash('showtopic=5031&st=0')}.php\n"
+                                            f"index__q{query_hash('showtopic=5031&st=15')}.php\n", encoding="utf-8")
+    report = Counter()
+    files = list(iter_dumps([flat, hashed], report))
+    assert [(f.name, f.kind, f.captured_at) for f in files] == [
+        (f"forumer_new_dump/index__q{query_hash('showtopic=5031&st=15')}.php", "topic", datetime(2006, 1, 1)),
+        ("index.php_showtopic=5031", "topic", datetime(2007, 9, 1)),
+        (f"forumer_new_dump/index__q{query_hash('showtopic=5031&st=0')}.php", "topic", datetime(2008, 1, 1))]
+    assert report["files read from the flat dump instead"] == 1 and [f.lossy for f in files] == [True, False, True]
+
+    report = import_dump(db, [flat, hashed])
+    posts = dict(db.query("SELECT id, html FROM forumer_posts"))
+    assert posts[388658].startswith("Héllo")  # not edited since: the first copy stays
+    assert posts[96564].startswith("I actually opt for jelly now")  # edited since: the later copy wins
+    assert db.query("SELECT COUNT(*) FROM forumer_posts") == [(2,)]
+    assert db.query("SELECT source_file FROM forumer_posts WHERE id = 96564") == [
+        (f"forumer_new_dump/index__q{query_hash('showtopic=5031&st=0')}.php",)]
+    assert db.query("SELECT member_id, name FROM forumer_members m JOIN forumer_posts p ON p.member_id = m.old_id "
+                    "WHERE p.id = 388658") == [(5765, "ninja!")]
+    assert report["links not restored"] == 0
 
 
 def test_increasing():

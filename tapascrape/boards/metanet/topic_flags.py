@@ -23,7 +23,7 @@ from collections import Counter
 from pathlib import Path
 
 from tapascrape.boards.metanet import parse
-from tapascrape.boards.metanet.dump import DumpFile, is_error, iter_dump
+from tapascrape.boards.metanet.dump import DumpFile, is_error, iter_dumps
 from tapascrape.boards.metanet.schema import TABLES
 from tapascrape.crawl.progress import Progress
 from tapascrape.db.base import Database
@@ -63,13 +63,13 @@ class _Batch:
                 self.flagged[flag].add(topic_id)
 
 
-def import_topic_flags(db: Database, root: Path, refresh: bool = False) -> Counter:
-    """Read the topic flags and polls of the dump at `root`; returns what was found."""
+def import_topic_flags(db: Database, roots: list[Path], refresh: bool = False) -> Counter:
+    """Read the topic flags and polls of the dumps at `roots`; returns what was found."""
     db.create_schema(TABLES)
     db.execute(f"DELETE FROM crawl_state WHERE {db.quote_ident('key')} LIKE ?", (OLD_PREFIX + "%",))
     report: Counter = Counter()
     done = set() if refresh else set(db.states(STATE_PREFIX))
-    files = [f for f in iter_dump(root) if f.kind in ("forum", "topic") and f.name not in done]
+    files = [f for f in iter_dumps(roots, report) if f.kind in ("forum", "topic") and f.name not in done]
     report["files already read"] = len(done)
     known = {topic_id for topic_id, in db.query("SELECT id FROM topics")}
     stored = {topic_id for topic_id, in db.query("SELECT id FROM forumer_topics")}

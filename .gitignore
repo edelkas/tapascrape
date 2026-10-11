@@ -8,4 +8,5 @@ cookies*.txt
 .venv/
 *.stackdump
 forumer_wayback_machine
+forumer_new_dump
 /site

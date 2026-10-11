@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from tapascrape.boards.metanet import parse
-from tapascrape.boards.metanet.dump import DumpFile, archive_position, is_error, iter_dump
+from tapascrape.boards.metanet.dump import DumpFile, archive_position, is_error, iter_dumps, newer
 from tapascrape.boards.metanet.schema import TABLES
 from tapascrape.content.attachments import looks_like_file
 from tapascrape.db.base import Database
@@ -20,10 +20,12 @@ PROFILE_COLUMNS = ("birthday", "location", "specific_location", "interests", "we
 
 
 class Collected:
-    """Everything read from the dump, merged across the pages that repeat it."""
+    """Everything read from the dumps, merged across the pages that repeat it. Pages come oldest
+    capture first, so the latest copy of a value wins (but see dump.newer)."""
 
     def __init__(self):
         self.posts: dict[int, tuple[parse.Post, str]] = {}  # old id -> (post, file)
+        self.lossy_posts: dict[int, bool] = {}  # old id -> whether the kept copy is a lossy one
         self.members: dict[int, dict] = {}
         self.member_seen: dict[int, datetime] = {}  # when each member's author block was shown
         self.topics: dict[int, dict] = {}
@@ -32,15 +34,15 @@ class Collected:
         self.emoticons: dict[str, str] = {}
         self.forums: dict[int, dict] = {}
 
-    def add_forums(self, page: str) -> None:
+    def add_forums(self, page: str, lossy: bool = False) -> None:
         """Forums named by a page's navigation strip (with their parents) and forum listings."""
         category, chain = parse.nav_forums(page)
         for i, (forum_id, name) in enumerate(chain):
             forum = self.forums.setdefault(forum_id, {"id": forum_id})
-            forum["name"] = name
+            forum["name"] = newer(forum.get("name"), name, lossy)
             forum["parent_id"] = chain[i - 1][0] if i else None
             if not i and category:
-                forum["category"] = category
+                forum["category"] = newer(forum.get("category"), category, lossy)
         for forum_id, name, description in parse.forum_rows(page):
             forum = self.forums.setdefault(forum_id, {"id": forum_id})
             forum.setdefault("name", name)
@@ -58,14 +60,12 @@ class Collected:
         if topic_id is not None and page.posts:
             topic = self.topic(topic_id)
             for key in ("forum_id", "title", "description"):
-                if getattr(page, key) and not topic.get(key):
-                    topic[key] = getattr(page, key)
+                topic[key] = newer(topic.get(key), getattr(page, key), file.lossy)
         for post in page.posts:
             post.topic_id = post.topic_id or topic_id
             post.forum_id = post.forum_id or page.forum_id
-            if post.id not in self.posts or self.posts[post.id][0].topic_id is None:
-                self.posts[post.id] = (post, file.name)
-            self.add_author(post)
+            self.add_post(post, file)
+            self.add_author(post, file.lossy)
             for attached in post.attachments:
                 ref = str(attached.attach_id) if attached.kind == "file" else attached.url
                 row = self.attachments.setdefault((post.id, ref), {"old_post_id": post.id, "ref": ref})
@@ -73,7 +73,23 @@ class Collected:
                 if attached.downloads is not None:
                     row["downloads"] = max(attached.downloads, row.get("downloads") or 0)
 
-    def add_author(self, post: parse.Post) -> None:
+    def add_post(self, post: parse.Post, file: DumpFile) -> None:
+        """A post's text only changed when it was edited (and stamped so): a later copy wins if
+        it was edited since, or knows the post's topic when the kept one didn't. Otherwise its
+        differences are the page's, not the post's (a word filter added later, links the
+        downloader broke): the first copy stays, unless it's lossy and this one isn't."""
+        kept = self.posts.get(post.id)
+        if kept is not None:
+            old = kept[0]
+            edited = post.edited_at is not None and (old.edited_at is None or post.edited_at > old.edited_at)
+            unedited = post.edited_at == old.edited_at
+            if not (edited or (old.topic_id is None and post.topic_id is not None)
+                    or (unedited and self.lossy_posts.get(post.id) and not file.lossy)):
+                return
+        self.posts[post.id] = (post, file.name)
+        self.lossy_posts[post.id] = file.lossy
+
+    def add_author(self, post: parse.Post, lossy: bool = False) -> None:
         author = post.author
         if author.member_id is None:
             return
@@ -83,19 +99,16 @@ class Collected:
         if seen >= self.member_seen.get(author.member_id, datetime.min):  # the latest wins
             self.member_seen[author.member_id] = seen
             for key in AUTHOR_FIELDS:
-                if getattr(author, key) is not None:
-                    member["group_name" if key == "group" else key] = getattr(author, key)
-            if post.signature:
-                member["signature"] = post.signature
+                column = "group_name" if key == "group" else key
+                member[column] = newer(member.get(column), getattr(author, key), lossy)
+            member["signature"] = newer(member.get("signature"), post.signature, lossy)
 
-    def add_profile(self, found: dict) -> None:
+    def add_profile(self, found: dict, lossy: bool = False) -> None:
         member = self.member(found["member_id"])
         member.setdefault("name", found["name"])
         for key in PROFILE_COLUMNS:
-            if found.get(key) is not None:
-                member[key] = found[key]
-        if found.get("group"):
-            member["group_name"] = found["group"]
+            member[key] = newer(member.get(key), found.get(key), lossy)
+        member["group_name"] = newer(member.get("group_name"), found.get("group"), lossy)
         if found.get("signature") and not member.get("signature"):
             member["signature"] = found["signature"]
 
@@ -104,9 +117,12 @@ def _int(value: str | None) -> int | None:
     return int(value) if value and value.isdigit() else None
 
 
-def collect(root: Path, report: Counter) -> Collected:
+def collect(roots: list[Path], report: Counter) -> Collected:
     found = Collected()
-    for file in iter_dump(root):
+    restorers = set()
+    for file in iter_dumps(roots, report):
+        if file.restorer is not None:
+            restorers.add(file.restorer)
         report[f"files: {file.kind}"] += 1
         if file.kind == "attach":
             _add_attach_file(found, file, report)
@@ -118,9 +134,11 @@ def collect(root: Path, report: Counter) -> Collected:
         if file.kind == "archive-topic":
             topic_id, offset = archive_position(file.name)
             for i, (author, day, body) in enumerate(parse.archive_posts(file.read())):
+                kept = found.archive.get((topic_id, offset + i), {})
                 found.archive[(topic_id, offset + i)] = {
-                    "topic_id": topic_id, "position": offset + i, "author": author,
-                    "posted_on": day, "html": body}
+                    "topic_id": topic_id, "position": offset + i, "posted_on": day,
+                    "author": newer(kept.get("author"), author, file.lossy),
+                    "html": newer(kept.get("html"), body, file.lossy)}
             continue
         if file.kind not in PAGE_KINDS:
             continue
@@ -130,28 +148,29 @@ def collect(root: Path, report: Counter) -> Collected:
             continue
         for code, url in parse.emoticons(page):
             found.emoticons.setdefault(url, code)
-        found.add_forums(page)
+        found.add_forums(page, file.lossy)
         if file.kind == "profile":
             if (profile := parse.profile(page)) is not None:
-                found.add_profile(profile)
+                found.add_profile(profile, file.lossy)
         elif file.kind == "members":
             for row in parse.member_list(page):
                 member = found.member(row["member_id"])
                 member.setdefault("name", row["name"])
                 for key in ("joined_at", "post_count"):
-                    member.setdefault(key, row[key])
-                member.setdefault("group_name", row["group"])
+                    member[key] = newer(member.get(key), row[key], file.lossy)
+                member["group_name"] = newer(member.get("group_name"), row["group"], file.lossy)
         elif file.kind == "forum":
             for row in parse.forum_topics(page):
                 topic = found.topic(row["topic_id"])
                 for key in ("title", "description", "started_at"):
-                    if row[key] and not topic.get(key):
-                        topic[key] = row[key]
+                    topic[key] = newer(topic.get(key), row[key], file.lossy)
                 topic["pinned"] = topic.get("pinned") or row["pinned"]
                 if forum_id := _int(file.query.get("showforum") or file.query.get("f")):
                     topic.setdefault("forum_id", forum_id)
         else:  # topic pages, and the topic views some redirects landed on
             found.add_topic_page(parse.topic_page(page), file)
+    for restorer in restorers:
+        report.update(restorer.counts)
     return found
 
 
@@ -167,11 +186,11 @@ def _add_attach_file(found: Collected, file: DumpFile, report: Counter) -> None:
     row.update(kind="file", data=data, source_file=file.name)
 
 
-def import_dump(db: Database, root: Path) -> Counter:
-    """Parse the dump at `root` into the forumer_* tables; returns what was found."""
+def import_dump(db: Database, roots: list[Path]) -> Counter:
+    """Parse the dumps at `roots` into the forumer_* tables; returns what was found."""
     db.create_schema(TABLES)
     report: Counter = Counter()
-    found = collect(root, report)
+    found = collect(roots, report)
     known_topics = {topic_id for topic_id, in db.query("SELECT id FROM topics")}
     for topic_id, (post, _) in found.posts.items():
         if post.topic_id is not None:
