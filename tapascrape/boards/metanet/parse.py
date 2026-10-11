@@ -296,14 +296,15 @@ TOPIC_ROW = re.compile(
 
 
 def forum_topics(page: str) -> list[dict]:
-    """Topics listed on a forum page, with their descriptions."""
+    """Topics listed on a forum page, with their descriptions. A "moved" row is the stub a moved
+    topic left in its old forum."""
     found = []
     for match in TOPIC_ROW.finditer(page):
         row = page[max(0, match.start() - 1000):match.start()].rsplit("<tr", 1)[-1]
-        cell = row.rsplit("<td", 1)[-1]  # the title's, with its "Pinned:" or "Poll:" prefix
+        cell = row.rsplit("<td", 1)[-1]  # the title's, with its "Pinned:", "Poll:" or "Moved:" prefix
         found.append({"topic_id": int(match.group(1)), "started_at": parse_datetime(match.group(2)),
                       "title": text(match.group(3)), "description": text(match.group(5)),
-                      "pinned": "Pinned:" in cell,
+                      "pinned": "Pinned:" in cell, "moved": "Moved:" in cell,
                       "poll": "Poll:" in cell or POLL_ICON.search(row) is not None,
                       "icon": int(m.group(1)) if (m := ICON.search(row)) else None})
     return found

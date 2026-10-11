@@ -565,7 +565,8 @@ def build_parser() -> argparse.ArgumentParser:
     metanet = p.add_subparsers(dest="metanet_command", required=True)
     p = metanet.add_parser("import-dump", help="read the dumps into the forumer_* tables")
     p.add_argument("dump", nargs="+", help="the dumps' folders (index.php_* pages, or a downloader's "
-                                           ".cdx.json and index__q*.php pages; and a/): give them all")
+                                           ".cdx.json and index__q*.php pages, in <timestamp>/ folders "
+                                           "or not; and a/): give them all")
     p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
     p.set_defaults(func=cmd_metanet_import)
     p = metanet.add_parser("topic-flags", aliases=["polls"],

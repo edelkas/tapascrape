@@ -7,7 +7,7 @@ import pytest
 
 from tapascrape.boards.metanet import parse
 from tapascrape.boards.metanet.dump import (archive_position, cdx_file_id, flat_file_id, is_error, iter_dumps,
-                                            kind_of, query_hash, query_of)
+                                            kind_of, only_filtered, query_hash, query_of)
 from tapascrape.boards.metanet.importer import import_dump
 from tapascrape.boards.metanet.link import increasing, link
 from tapascrape.boards.metanet.relink import LinkRestorer
@@ -177,7 +177,9 @@ def test_lists():
              "<br /><span class='desc'>Tears, tantrums</span></td>")
     assert parse.forum_topics(forum) == [{"topic_id": 5000, "started_at": datetime(2005, 9, 28, 19, 49),
                                           "title": 'The "Leavers" Thread', "description": "Tears, tantrums",
-                                          "pinned": True, "poll": False, "icon": None}]
+                                          "pinned": True, "moved": False, "poll": False, "icon": None}]
+    moved = forum.replace("Pinned:", "Moved:")
+    assert [(row["pinned"], row["moved"]) for row in parse.forum_topics(moved)] == [(False, True)]
     assert [(row["poll"], row["icon"]) for row in parse.forum_topics(FORUM_PAGE)] == [
         (True, None), (True, None), (False, parse.ALERT_ICON)]
 
@@ -278,6 +280,15 @@ def with_session(page: str) -> str:
         "<body>", f"<body><script>function buddy_pop() {{ window.open('index.php?act=buddy&s={SESSION}') }}</script>")
 
 
+def test_only_filtered():
+    assert only_filtered("Free stuff.", "delicious stuff.")
+    assert only_filtered("Why We Crave Horror Movies", "Why We Crave Horror food network")
+    assert only_filtered("FAQ: Metanet", "FAQ: MetaNet")
+    assert not only_filtered("Elimination 2 SF's - xaelar vs. lookatthis", "Elimination 2 Final - xaelar is the Champion")
+    assert not only_filtered("Colossus", "Colossus II")
+    assert not only_filtered("Demo Competition", "Demo Competition on hold")
+
+
 def test_cdx_file_id():
     assert cdx_file_id("http://metanet.2.forumer.com:80/index.php?s=&showtopic=14574") == \
         f"index__q{query_hash('s=&showtopic=14574')}.php"
@@ -312,8 +323,8 @@ def test_two_dumps(db, tmp_path):
     page = with_session(TOPIC_PAGE).replace("Hello", "Héllo")
     (flat / "index.php_showtopic=5031").write_text(page, encoding="cp1252")
     # the new dump: the same page (read from the flat dump, dated by the new one), and a later
-    # copy of the topic's page where the member's post lost its accent and went through a word
-    # filter, and the guest's was edited
+    # copy of the topic's page where the member's post lost its accent and went through the 2012
+    # word filter, and the guest's was edited
     later = rewritten(page.replace("Hello", "Burrito").replace(
         "I actually opt for jam", "I actually opt for jelly now<br /><br /><span class='edit'>This post has been "
         "edited by <b>visitor</b> on October 03, 2005 10:00 am</span>"))
@@ -324,7 +335,7 @@ def test_two_dumps(db, tmp_path):
     (hashed / ".cdx.json").write_text(json.dumps([
         ["20070901000000", "http://metanet.2.forumer.com:80/index.php?showtopic=5031"],
         ["20070101000000", "http://metanet.2.forumer.com:80/index.php?showtopic=5031"],
-        ["20080101000000", "http://metanet.2.forumer.com:80/index.php?showtopic=5031&st=0"],
+        ["20120324000000", "http://metanet.2.forumer.com:80/index.php?showtopic=5031&st=0"],
         ["20060101000000", "http://metanet.2.forumer.com:80/index.php?showtopic=5031&st=15"]]), encoding="utf-8")
     (hashed / ".downloaded.txt").write_text(f"{flat_file_id('index.php_showtopic=5031')}\n"
                                             f"index__q{query_hash('showtopic=5031&st=0')}.php\n"
@@ -334,12 +345,13 @@ def test_two_dumps(db, tmp_path):
     assert [(f.name, f.kind, f.captured_at) for f in files] == [
         (f"forumer_new_dump/index__q{query_hash('showtopic=5031&st=15')}.php", "topic", datetime(2006, 1, 1)),
         ("index.php_showtopic=5031", "topic", datetime(2007, 9, 1)),
-        (f"forumer_new_dump/index__q{query_hash('showtopic=5031&st=0')}.php", "topic", datetime(2008, 1, 1))]
-    assert report["files read from the flat dump instead"] == 1 and [f.lossy for f in files] == [True, False, True]
+        (f"forumer_new_dump/index__q{query_hash('showtopic=5031&st=0')}.php", "topic", datetime(2012, 3, 24))]
+    assert report["forumer_new_dump: files read from the flat dump instead"] == 1
+    assert [f.lossy for f in files] == [True, False, True]
 
     report = import_dump(db, [flat, hashed])
     posts = dict(db.query("SELECT id, html FROM forumer_posts"))
-    assert posts[388658].startswith("Héllo")  # not edited since: the first copy stays
+    assert posts[388658].startswith("Héllo")  # only filtered since: the first copy stays
     assert posts[96564].startswith("I actually opt for jelly now")  # edited since: the later copy wins
     assert db.query("SELECT COUNT(*) FROM forumer_posts") == [(2,)]
     assert db.query("SELECT source_file FROM forumer_posts WHERE id = 96564") == [
@@ -347,6 +359,62 @@ def test_two_dumps(db, tmp_path):
     assert db.query("SELECT member_id, name FROM forumer_members m JOIN forumer_posts p ON p.member_id = m.old_id "
                     "WHERE p.id = 388658") == [(5765, "ninja!")]
     assert report["links not restored"] == 0
+
+
+def test_snapshot_dump(db, tmp_path):
+    flat, every = tmp_path / "forumer_wayback_machine", tmp_path / "forumer_all_snapshots"
+    topic = f"index__q{query_hash('showtopic=5031')}.php"
+    # the guest's post edited, the member's changed without a new edit stamp (as moderators could)
+    edited = TOPIC_PAGE.replace("I actually opt for jam", "I actually opt for jelly now<br /><br /><span class='edit'>"
+                                "This post has been edited by <b>visitor</b> on October 03, 2005 10:00 am</span>"
+                                ).replace("Hello", "Hello again")
+    # the reopened board's word filter (its words are lowercase), with the member's post count
+    # since, and the topic renamed
+    filtered = edited.replace("Hello", "burrito").replace("Advanced Member", "Advanced burrito").replace("Posts: 1,085", "Posts: 1,200").replace(
+        "The world wants to know...", "The world has spoken")
+    saved = {f"20060101000000/{topic}": TOPIC_PAGE, f"20070101000000/{topic}": edited,
+             f"20120324000000/{topic}": filtered,
+             "20080101000000/index__qa1b2c3d4e5f6.php": FORUM_PAGE}  # a name the downloader made otherwise
+    for name, page in saved.items():
+        (every / name).parent.mkdir(parents=True, exist_ok=True)
+        (every / name).write_text(page, encoding="cp1252")
+    url = "http://metanet.2.forumer.com:80/index.php?"
+    rows = [["20060101000000", url + "showtopic=5031"], ["20070101000000", url + "showtopic=5031"],
+            ["20120324000000", url + "showtopic=5031"], ["20080101000000", url + "showforum=5%EF%BF%BD"],
+            ["20060201000000", url + "showtopic=5031&view=getlastpost"]]  # a redirect: no page
+    (every / ".cdx.json").write_text(json.dumps(rows + rows), encoding="utf-8")  # (listed twice, as it does)
+    (every / ".downloaded.txt").write_text("\n".join(saved), encoding="utf-8")
+    flat.mkdir()
+    (flat / "index.php_showtopic=5031").write_text(TOPIC_PAGE, encoding="cp1252")  # the 2006 snapshot
+    (flat / "index.php_s=&showtopic=5031&st=0&#entry96564").write_text(TOPIC_PAGE, encoding="cp1252")
+
+    report = Counter()
+    files = iter_dumps([flat, every], report)
+    assert [(f.name, f.kind, f.captured_at) for f in files] == [
+        ("index.php_s=&showtopic=5031&st=0&#entry96564", "topic", None),
+        (f"forumer_all_snapshots/20060101000000/{topic}", "topic", datetime(2006, 1, 1)),
+        (f"forumer_all_snapshots/20070101000000/{topic}", "topic", datetime(2007, 1, 1)),
+        ("forumer_all_snapshots/20080101000000/index__qa1b2c3d4e5f6.php", "forum", datetime(2008, 1, 1)),
+        (f"forumer_all_snapshots/20120324000000/{topic}", "topic", datetime(2012, 3, 24))]
+    assert [f.filtered for f in files] == [False, False, False, False, True]
+    assert report == Counter({"forumer_all_snapshots: snapshots listed": 5,
+                              "forumer_all_snapshots: snapshots downloaded": 4,
+                              "forumer_wayback_machine: files read from the snapshots instead": 1})
+    assert flat_file_id("index.php_s=&showtopic=5031&st=0&#entry96564") == cdx_file_id(
+        url + "s=&showtopic=5031&st=0&#entry96564")
+
+    report = import_dump(db, [flat, every])
+    posts = dict(db.query("SELECT id, html FROM forumer_posts"))
+    assert posts[388658].startswith("Hello again")  # the latest copy, but not the filtered one
+    assert posts[96564].startswith("I actually opt for jelly now")
+    assert report["posts a later capture showed edited"] == 1
+    assert report["posts a later capture showed changed without an edit stamp"] == 1
+    # text from the filtered copy doesn't replace what earlier ones showed; numbers do
+    assert db.query("SELECT title, post_count FROM forumer_members WHERE old_id = 5765") == [("Advanced Member", 1200)]
+    assert db.query("SELECT title, description FROM forumer_topics WHERE id = 5031") == [
+        ("The world has spoken", "Jelly or jam?")]
+    assert db.query("SELECT id, title FROM forumer_topics WHERE id IN (24036, 7000) ORDER BY id") == [
+        (7000, "Plain"), (24036, "Yea or Nay")]
 
 
 def test_increasing():
@@ -365,8 +433,9 @@ def test_link(db):
     db.upsert_many("users", [{"id": 100, "name": "Keron"}, {"id": 101, "name": "101"},
                              {"id": 102, "name": "102"}, {"id": 103, "name": "ska"},
                              {"id": 104, "name": "late"}])
-    db.upsert_many("forumer_members", [{"old_id": 1, "name": "Keron"}, {"old_id": 5, "name": "7!"},
-                                       {"old_id": 6, "name": "-Gc-"}, {"old_id": 9, "name": "ska"}])
+    # (7 was pruned before the latest member index: it never reached Tapatalk, nor takes a position)
+    db.upsert_many("forumer_members", [{"old_id": i, "name": n, "listed": i != 7} for i, n in (
+        (1, "Keron"), (5, "7!"), (6, "-Gc-"), (7, "gone"), (9, "ska"))])
     db.upsert_many("topics", [{"id": 50, "forum_id": 1, "name": "t", "stickied": False, "locked": False}])
     posts = [(10, 103, 1, "2007-08-26 08:59:55"), (11, 100, 2, "2007-08-26 09:08:06"),
              (12, 0, 3, "2007-08-26 09:08:40"), (13, 103, 4, "2007-08-26 10:00:00"),
@@ -391,7 +460,7 @@ def test_link(db):
                                             "source_file": "index.php_act=Attach&id=504"}])
     report = link(db)
     assert db.query("SELECT old_id, user_id, match FROM forumer_members ORDER BY old_id") == [
-        (1, 100, "name"), (5, 101, "position"), (6, 102, "position"), (9, 103, "name")]
+        (1, 100, "name"), (5, 101, "position"), (6, 102, "position"), (7, None, None), (9, 103, "name")]
     assert report["users named by their id, now named"] == 2
     assert db.query("SELECT id, post_id, match FROM forumer_posts ORDER BY id") == [
         (500, 10, "time"), (501, 11, "time+author"), (502, 12, "time+author"), (504, 13, "time"),

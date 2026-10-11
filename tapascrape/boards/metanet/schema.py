@@ -13,6 +13,8 @@ FORUMER_MEMBERS = Table("forumer_members", (
     Column("name", TEXT),
     Column("user_id", INT),                 # -> users.id
     Column("match", TEXT),                  # "name" or "position" (see link.link_members)
+    Column("listed", BOOL),                 # in the latest member index: still a member then, so
+                                            # migrated (False: pruned before; NULL: no index read)
     Column("group_name", TEXT),
     Column("title", TEXT),                  # member title, e.g. "Advanced Member"
     Column("joined_at", DATETIME),          # day only

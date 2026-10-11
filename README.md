@@ -184,11 +184,18 @@ Rerunning `site` overwrites the pages but doesn't delete anything, so it's safe 
 
 Board-specific extras live under `tapascrape/boards/` and the `metanet` command group. The general commands never load them.
 
-Before Yuku and Tapatalk, Metanet Forums was an Invision Power Board on Forumer (`metanet.2.forumer.com`). Wayback Machine dumps of that site hold what the migrations dropped: posts with their old ids from 2004–2008, the full member list with old ids, profiles and more. There are two dumps, and the commands that read dumps take both and read them as one: `forumer_wayback_machine` (2019, ~10k files) and `forumer_new_dump` (~26k files, made with [StrawberryMaster's wayback-machine-downloader](https://github.com/StrawberryMaster/wayback-machine-downloader)).
+Before Yuku and Tapatalk, Metanet Forums was an Invision Power Board on Forumer (`metanet.2.forumer.com`). Wayback Machine dumps of that site hold what the migrations dropped: posts with their old ids from 2004–2008, the full member list with old ids, profiles and more. There are three dumps, and the commands that read dumps take them all and read them as one:
+
+- `forumer_wayback_machine` (2019, ~10k files).
+- `forumer_new_dump` (~26k files, the latest snapshot of each URL).
+- `forumer_all_snapshots` (~51k files, every snapshot).
+
+The last two were made with [StrawberryMaster's wayback-machine-downloader](https://github.com/StrawberryMaster/wayback-machine-downloader).
 
 ```sh
-tapascrape metanet import-dump forumer_wayback_machine forumer_new_dump --db sqlite:///metanet.db   # -> forumer_* tables
-tapascrape metanet topic-flags forumer_wayback_machine forumer_new_dump --db sqlite:///metanet.db   # polls, ! and ? icons (resumable)
+DUMPS="forumer_wayback_machine forumer_new_dump forumer_all_snapshots"
+tapascrape metanet import-dump $DUMPS --db sqlite:///metanet.db   # -> forumer_* tables
+tapascrape metanet topic-flags $DUMPS --db sqlite:///metanet.db   # polls, ! and ? icons (resumable)
 tapascrape metanet link --db sqlite:///metanet.db   # old ids -> ours; stores the dump's attachment files
 tapascrape metanet attachments --db sqlite:///metanet.db   # archived act=Attach downloads (Wayback)
 tapascrape metanet avatars --db sqlite:///metanet.db       # forumer-era avatars -> forumer_avatars (Wayback)
@@ -196,19 +203,36 @@ tapascrape metanet quotes --db sqlite:///metanet.db        # `quotes`, also know
 tapascrape metanet site --db sqlite:///metanet.db --out site   # `site`, with what only the dump has
 ```
 
-Both commands can be rerun. `import-dump` skips the dumps' error, login-only and parked-domain pages. It understands the board's skins, which use different date formats. It rebuilds the `forumer_*` rows from what it reads, so always give it every dump. After importing, run the commands below it again, in order.
+Both commands can be rerun, and they log their progress. `import-dump` skips the dumps' error, login-only and parked-domain pages. It understands the board's skins, which use different date formats. It rebuilds the `forumer_*` rows from what it reads, so always give it every dump. After importing, run the commands below it again, in order. Opening a file is slow on some disks (about 0.1 s each), so both commands read 16 files at a time. A full import took 2 minutes with the files in the disk cache; reading them cold should take under 20 minutes.
 
-The two dumps name their files differently:
+The dumps are laid out in three ways:
 
 - **Flat** (`forumer_wayback_machine`). A page is named after its URL, with `?` turned into `_` (`index.php_s=&showtopic=19141`).
-- **Hashed** (any folder with a `.cdx.json`). The downloader hashes a page's query into its name: `index.php?Q` becomes `index__q` + the first 12 hex digits of SHA-256(Q) + `.php`. Its `.cdx.json` lists every snapshot it found (`[timestamp, url]`), and each file is the latest snapshot of its URL, so recomputing the names (`dump.cdx_file_id`) gives every file back its URL and capture date. That explains 25,850 of the 25,919 files; the rest are folders saved as `index.html` (`a/General-Community-7/`).
+- **Hashed** (`forumer_new_dump`, made with `--local`: a folder with a `.cdx.json`). The downloader hashes a page's query into its name: `index.php?Q` becomes `index__q` + the first 12 hex digits of SHA-256(Q) + `.php`. Its `.cdx.json` lists every snapshot it found (`[timestamp, url]`), and each file is the latest snapshot of its URL, so recomputing the names (`dump.cdx_file_id`) gives every file back its URL and capture date.
+- **Snapshots** (`forumer_all_snapshots`, made with `--all-timestamps` and without `--local`). Every snapshot, named as in a hashed dump, in a folder per capture time (`20061019140206/index__q….php`), and listed as such in `.downloaded.txt`. The pages are as the board served them. Its CDX lists every snapshot twice: it holds 50,930 of the 52,190 snapshots. The ones missing are redirects with no page of their own, mostly `view=getlastpost` and `view=getnewpost` links (302s in the Wayback Machine).
 
-The downloader also changed the hashed dump's pages:
+`--local` changed the hashed dump's pages:
 
-- **It rewrote the board's links** the same way (`http://metanet.2.forumer.com/index.php?Q` became `./index__q<hash>.php`). The ids the parsers read from links (authors, quote buttons, attachments, the navigation) went with them. `relink.py` puts them back by hashing candidate queries: every snapshot's, every member, topic and forum id, and the board's link templates filled with the ids the page shows elsewhere (its posts, member numbers, its own URL's, and the session id each response carried). On sampled pages both dumps have, the restored pages give the parsers the same posts, authors, attachments, forum listings and profiles as the flat dump's copies. What's left (about 6% of links) is mostly board chrome, plus links members pasted into posts and signatures with arbitrary queries (`view=findpost&p=…`). Those now point at the board's index; links whose text shows the URL are restored from it.
+- **It rewrote the board's links** the same way (`http://metanet.2.forumer.com/index.php?Q` became `./index__q<hash>.php`). The ids the parsers read from links (authors, quote buttons, attachments, the navigation) went with them. `relink.py` puts them back by hashing candidate queries: every snapshot's, every member, topic and forum id, and the board's link templates filled with the ids the page shows elsewhere (its posts, member numbers, its own URL's, and the session id each response carried). What's left (about 6% of links) is mostly board chrome, plus links members pasted into posts and signatures with arbitrary queries (`view=findpost&p=…`). Those now point at the board's index; links whose text shows the URL are restored from it.
 - **It dropped non-ASCII characters** (`é`, `ü`, `©`…), when it re-encoded the pages. Characters written as HTML entities survive.
 
-So, when both dumps have a page (the same URL, 9,995 of them), it's read from the flat dump, dated by the new dump's CDX. Pages are read oldest capture first, and a later copy of a topic or member detail replaces an earlier one. A copy from the hashed dump only does so if it differs in more than the dropped characters and the links. A post's text only changes when the later copy was edited since (forumer stamped edits: "This post has been edited by…"). Other differences belong to the page, not the post: the board added a word filter later on (job → burrito, illegal → interesting), and the downloader broke links. Without a newer edit stamp, the first copy stays. `source_file` names the copy kept (`forumer_new_dump/index__q….php` for the new dump's). Nothing is duplicated: the dumps' rows share their old ids.
+So every capture is read once, from the best copy:
+
+- The snapshots dump's copy comes first.
+- Otherwise the flat dump's copy. A flat dump file the same size as a snapshot of its URL is that snapshot; 11,429 of its files are. The rest are dated by the latest snapshot of their URL.
+- Otherwise the hashed dump's copy (24 of its pages remain).
+
+Every capture of a page adds what it shows: listings captured at different times show different topics, and topic pages show later edits. Pages are read oldest capture first, and a later copy of a topic, forum or member detail replaces an earlier one. These rules keep later copies from overwriting good data:
+
+- **Post text.** A later copy wins if it was edited since; forumer stamped edits ("This post has been edited by…"). A copy with an older stamp, or with none where the kept copy has one, shows the post before an edit, so it doesn't win. With the same stamp, the later copy wins too, since moderators could edit without a stamp, unless it's a filtered or lossy copy (below). A post's topic and forum are the latest copy's (topics were moved).
+- **Author blocks.** These show the member as they were when the page was captured, so the latest capture's wins.
+- **Moved topics.** A moved topic left a "Moved:" stub in its old forum's listing. A stub doesn't say where the topic is, nor whether it's pinned or has a poll or an icon.
+- **The word filter.** The board reopened in 2011–2012 ("We're Back! Metanet's Forumer Forums temporarily open for business!"). It then had a joke word filter: little → cilantro, job → burrito, girl → steak, free → delicious, password → oven…. It's first seen in 2012-03-24's captures, and February's have none. From March 2012 on (`dump.FILTERED_SINCE`), a capture's text only fills what earlier ones didn't show; its numbers and dates still count.
+- **Hashed dump copies.** These only replace text if they differ in more than the dropped characters and the links.
+
+The lite archive's member index was saved several times. Its 2008 copies list about 400 members that the board pruned later, and pages from before then show them too. The latest index sets `forumer_members.listed`: pruned members weren't migrated, so `link` doesn't pair them up by position.
+
+`source_file` names the copy kept (`forumer_all_snapshots/<timestamp>/index__q….php` for the snapshots). Nothing is duplicated: the dumps' rows share their old ids.
 
 `topic-flags` (formerly `polls`, still accepted) reads only the forum and topic pages, for what they show about topics that Tapatalk didn't keep, into `forumer_topics`:
 

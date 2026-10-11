@@ -23,7 +23,7 @@ from collections import Counter
 from pathlib import Path
 
 from tapascrape.boards.metanet import parse
-from tapascrape.boards.metanet.dump import DumpFile, is_error, iter_dumps
+from tapascrape.boards.metanet.dump import DumpFile, is_error, iter_dumps, read_ahead
 from tapascrape.boards.metanet.schema import TABLES
 from tapascrape.crawl.progress import Progress
 from tapascrape.db.base import Database
@@ -76,12 +76,14 @@ def import_topic_flags(db: Database, roots: list[Path], refresh: bool = False) -
     votes = dict(db.query("SELECT topic_id, vote_count FROM forumer_polls"))
     progress = Progress("forumer topic flags", len(files))
     batch = _Batch()
-    for file in files:
-        page = file.read()
-        if not is_error(page):
+    for file, data in read_ahead(files):
+        page = file.text(data or b"")
+        if data is not None and not is_error(page):
             report[f"files: {file.kind}"] += 1
             if file.kind == "forum":
                 for row in parse.forum_topics(page):
+                    if row["moved"]:  # a moved topic's stub: no icon, nor poll mark
+                        continue
                     on = {ICON_FLAGS.get(row["icon"]), "has_poll" if row["poll"] else None}
                     batch.show(row["topic_id"], FLAGS, on)
             else:

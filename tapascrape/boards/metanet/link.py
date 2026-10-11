@@ -3,8 +3,9 @@
 Members: Tapatalk gave the migrated members new ids in the old ids' order, so
 names that match exactly anchor the mapping, and members between two anchors
 pair up by position when both sides have the same number of them (this also
-names the accounts Tapatalk only knows by their id). Members still unplaced
-get the author of their linked posts, when those all agree.
+names the accounts Tapatalk only knows by their id). Members pruned before the
+latest member index weren't migrated, so they take no position. Members still
+unplaced get the author of their linked posts, when those all agree.
 
 Posts: topic ids survived, and forumer showed UTC times to the minute, so a
 post is the one of its topic posted in the same minute; ties are broken by
@@ -69,7 +70,10 @@ def increasing(pairs: list[tuple[int, int]]) -> list[tuple[int, int]]:
 
 
 def link_members(db: Database) -> Counter:
-    old = db.query("SELECT old_id, name FROM forumer_members ORDER BY old_id")
+    """Members pruned before the latest member index (listed false) never reached Tapatalk:
+    they don't take a position, and only match a user of their name nobody else matched."""
+    members = db.query("SELECT old_id, name, listed FROM forumer_members ORDER BY old_id")
+    old = [(old_id, name) for old_id, name, listed in members if listed is None or listed]
     users = db.query("SELECT id, name FROM users WHERE id > 0 ORDER BY id")
     user_pos = {user_id: n for n, (user_id, _) in enumerate(users)}
     names = Counter(name for _, name in users)
@@ -82,16 +86,22 @@ def link_members(db: Database) -> Counter:
         if 1 < i2 - i == u2 - u:
             for step in range(1, i2 - i):
                 matched[old[i + step][0]] = (users[u + step][0], "position")
+    claimed = {user_id for user_id, _ in matched.values()}
+    pruned = [(old_id, name) for old_id, name, listed in members if listed is not None and not listed]
+    pruned_names = Counter(name for _, name in pruned)
+    for old_id, name in pruned:
+        if old_names[name] == 0 and pruned_names[name] == 1 and by_name.get(name) not in claimed | {None}:
+            matched[old_id] = (by_name[name], "name")
     db.execute("UPDATE forumer_members SET user_id = NULL, " + db.quote_ident("match") + " = NULL")
     db.update_many("forumer_members", [{"old_id": old_id, "user_id": user_id, "match": how}
                                        for old_id, (user_id, how) in matched.items()])
     numeric = {str(user_id) for user_id, name in users if name == str(user_id)}
     report = Counter({f"members matched by {how}": n
                       for how, n in Counter(how for _, how in matched.values()).items()})
-    report["members unmatched"] = len(old) - len(matched)
+    report["members unmatched"] = len(members) - len(matched)
     report["users named by their id, now named"] = sum(
         1 for user_id, _ in matched.values() if str(user_id) in numeric)
-    log.info("members: %d of %d matched", len(matched), len(old))
+    log.info("members: %d of %d matched", len(matched), len(members))
     return report
 
 
