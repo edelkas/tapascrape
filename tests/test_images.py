@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from email.message import Message
 
@@ -68,10 +69,34 @@ def test_collect_images():
                                                   "[img]http://a.com/2.png[/img][img]http://a.com/2.png[/img]"]}) == 2
         assert db.query("SELECT id, url, host, uses, used_in FROM embedded_images ORDER BY id") == [
             (1, "http://a.com/2.png", "a.com", 2, "signatures"), (2, "http://a.com/1.png", "a.com", 1, "signatures")]
-        assert collect_images(db, {"signatures": ["[img]http://a.com/3.png[/img] [img]http://A.com/1.png[/img]"]}) == 1
-        assert db.query("SELECT id, url, uses, used_in FROM embedded_images ORDER BY id") == [
-            (1, "http://a.com/2.png", 0, None), (2, "http://a.com/1.png", 1, "signatures"),
-            (3, "http://a.com/3.png", 1, "signatures")]
+        # posts: their own count; most used new ones first
+        assert collect_images(db, {"signatures": ["[img]http://a.com/3.png[/img] [img]http://A.com/1.png[/img]"],
+                                   "posts": ["[img]http://a.com/1.png[/img] [img]http://a.com/4.png[/img]",
+                                             "[img]http://a.com/4.png[/img]"]}) == 2
+        columns = "id, url, uses, signature_uses, post_uses, used_in"
+        assert db.query(f"SELECT {columns} FROM embedded_images ORDER BY id") == [
+            (1, "http://a.com/2.png", 0, 0, 0, None), (2, "http://a.com/1.png", 2, 1, 1, "posts,signatures"),
+            (3, "http://a.com/4.png", 2, 0, 2, "posts"), (4, "http://a.com/3.png", 1, 1, 0, "signatures")]
+        # a run leaving posts out keeps their counts
+        collect_images(db, {"signatures": ["[img]http://a.com/1.png[/img]"]})
+        assert db.query(f"SELECT {columns} FROM embedded_images ORDER BY id") == [
+            (1, "http://a.com/2.png", 0, 0, 0, None), (2, "http://a.com/1.png", 2, 1, 1, "posts,signatures"),
+            (3, "http://a.com/4.png", 2, 0, 2, "posts"), (4, "http://a.com/3.png", 0, 0, 0, None)]
+
+
+def test_post_texts():
+    with open_database(":memory:") as db:
+        db.create_schema()
+        db.upsert_many("posts", [
+            {"id": 1, "topic_id": 1, "index": 1, "source_fixed": "[img]http://a.com/fixed.png[/img]",
+             "source": "[img]http://a.com/source.png[/img]", "content": ""},
+            {"id": 2, "topic_id": 1, "index": 2, "source_fixed": None,
+             "source": "[img]http://a.com/source.png[/img]", "content": ""},
+            {"id": 3, "topic_id": 1, "index": 3, "source_fixed": None, "source": None,
+             "content": '<img src="http://a.com/html.png">'},
+            {"id": 4, "topic_id": 1, "index": 4, "source_fixed": None, "source": None, "content": "text"}])
+        assert [url for text in images_module.post_texts(db, batch=2) for url in embedded_urls(text)] == [
+            "http://a.com/fixed.png", "http://a.com/source.png", "http://a.com/html.png"]
 
 
 ORIGINAL, WATERMARKED, PLACEHOLDER, LATER = png(b"original"), png(b"watermarked"), gif(b"removed"), png(b"v2")
@@ -179,9 +204,14 @@ def test_recover_images(network):
         assert sum("old.host.com" in url for url in network["live"]) == 1  # a host gone is asked once
         assert sum(row[1] == "not archived: can't be checked" for row in rows.values()) == 3
 
+        # images only posts use aren't looked for when posts are left out
+        collect_images(db, {"posts": ["[img]http://i9.pics.com/post.png[/img]"]})
+        assert recover_images(db, Throttle(0), scopes=["signatures"]) == {}
+        assert sum(recover_images(db, Throttle(0), scopes=["posts"]).values()) == 1
+
         # nothing left to look for; --retry looks again for the missing ones
         assert recover_images(db, Throttle(0)) == {}
-        assert sum(recover_images(db, Throttle(0), retry=True).values()) == 6
+        assert sum(recover_images(db, Throttle(0), retry=True).values()) == 7
 
 
 def test_site_uses_copies(tmp_path):
@@ -203,3 +233,40 @@ def test_site_uses_copies(tmp_path):
         build_site(db, tmp_path, "Board")
     assert (tmp_path / "files/images/1.png").read_bytes() == png(b"alumni")
     assert 'src="../files/images/1.png"' in (tmp_path / "u/1.html").read_text(encoding="utf-8")
+
+
+def test_folder_lookups(monkeypatch):
+    album = "http://i9.pics.com/albums/u/"
+    big = "http://big.host.com/user/uploads/"
+    asked = []
+
+    def folder(prefix, throttle):
+        asked.append(prefix)
+        if prefix == big:
+            return None  # too many captures to list
+        return [images_module.Capture("http://I9.pics.com:80/albums/u/A%20B.png", "2006", "image/png", "X"),
+                images_module.Capture("http://i9.pics.com/albums/u/A%20B.png", "2007", "image/png", "X"),
+                images_module.Capture("http://i9.pics.com/albums/u/A%20B.png", "2008", "image/png", "Y"),
+                images_module.Capture("http://i9.pics.com/albums/u/c.png", "2006", "image/png", "Z")]
+
+    def one(url, throttle):
+        asked.append(url)
+        return [images_module.Capture(url, "2009", "image/png", "W")]
+
+    monkeypatch.setattr(images_module, "folder_image_captures", folder)
+    monkeypatch.setattr(images_module, "image_captures", one)
+    urls = [album + "A B.png", album + "c.png", album + "d.png", "http://i9.pics.com/albums/v/e.png",
+            big + "1.png", big + "2.png", big + "3.png"]
+    with open_database(":memory:") as db:
+        db.create_schema()
+        collect_images(db, {"posts": [f"[img]{url}[/img]" for url in urls]})
+        ids = dict(db.query("SELECT url, id FROM embedded_images"))
+        assert images_module.look_up_captures(db, list((ids[url], url) for url in urls), Throttle(0))
+        found = {url: json.loads(captures) for url, captures in db.query("SELECT url, captures FROM embedded_images")}
+    assert found[album + "A B.png"] == [["2006", "http://I9.pics.com:80/albums/u/A%20B.png", "X"],
+                                        ["2008", "http://i9.pics.com/albums/u/A%20B.png", "Y"]]
+    assert found[album + "d.png"] == []  # listed with its folder: not archived
+    assert found[big + "1.png"] == [["2009", big + "1.png", "W"]]
+    # one query for the album, one for the big folder, then its images and the lone one one by one
+    assert sorted(asked) == sorted([album, big, "http://i9.pics.com/albums/v/e.png", big + "1.png",
+                                    big + "2.png", big + "3.png"])

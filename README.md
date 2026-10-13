@@ -30,7 +30,7 @@ tapascrape scan --db sqlite:///metanet.db
 tapascrape smilies --db sqlite:///metanet.db   # smiley images -> smilies table (Wayback / Tapatalk)
 tapascrape fix --db sqlite:///metanet.db       # also lists attachments in the attachments table
 tapascrape attachments --db sqlite:///metanet.db   # recover attachment files (Wayback)
-tapascrape images --db sqlite:///metanet.db   # copies of images signatures embed (host / Wayback)
+tapascrape images --db sqlite:///metanet.db   # copies of embedded images (host / Wayback); --no-posts
 tapascrape scan --db sqlite:///metanet.db --fixed   # what's left
 tapascrape quotes --db sqlite:///metanet.db   # the posts quotes quote -> quotes table
 tapascrape site --db sqlite:///metanet.db --out site --title "Metanet Forums"   # static HTML site
@@ -124,20 +124,22 @@ Sentinels are never written inside `[code]` blocks, nor in a post whose source a
 
 ## Embedded images
 
-Images embedded with `[img]` from other hosts disappear over time: ImageShack and TinyPic dropped their old files, sites closed, and Photobucket now stamps a watermark on old images. `tapascrape images` keeps copies, for signatures for now. Run it after `fix`. It's resumable and logs its progress.
+Images embedded with `[img]` from other hosts disappear over time: ImageShack and TinyPic dropped their old files, sites closed, and Photobucket now stamps a watermark on old images. `tapascrape images` keeps copies of the ones in signatures and posts. Run it after `fix`. It's resumable and logs its progress.
 
-1. **Listing.** Every distinct image URL embedded in a signature gets a row of the `embedded_images` table, with a stable id of ours. Smileys and forumer uploads are left out, since `smilies` and `attachments` hold those.
+1. **Listing.** Every distinct image URL embedded in a signature or a post gets a row of the `embedded_images` table, with a stable id of ours, most used first. `signature_uses` and `post_uses` count where it's embedded. Smileys and forumer uploads are left out, since `smilies` and `attachments` hold those.
 2. **The original host.** Each image is requested from where it was embedded. The answer counts only if it is a whole image (GIF, PNG, JPEG or BMP, not cut short), not an HTML page. Redirects are followed, since some hosts moved their files (deviantART's are on a CDN now). Hosts that don't resolve are given up on after the first try.
-3. **The Wayback Machine.** It lists the URL's captures that were images, one per change of content, with the SHA-1 of each.
+3. **The Wayback Machine.** It lists the URL's captures that were images, one per change of content, with the SHA-1 of each. A folder holding three or more of the images (a Photobucket album, say) is listed with one query instead; folders right below a host's root, and any with over 20,000 captures, are looked up image by image.
 4. **The decision.**
    - A live copy that is byte for byte the oldest capture is kept.
    - Otherwise the oldest capture that is a whole image is downloaded and kept. A host's current copy may have been watermarked, overwritten or replaced since. The Wayback Machine archives those later versions too, so only the oldest is trusted.
    - Otherwise the live copy is kept, if there is one (`note` says it couldn't be checked).
    - Placeholders are never kept. A host's placeholder is the same picture served for three or more file names, or a picture a redirect led to that two or more URLs redirect to or that's named like one (`removed.png`, `404.gif`...). On the Wayback Machine, it's the same picture captured at three or more file names that replaced an earlier picture at some of them: a host's stand-in, archived after the image was gone.
 
-`status` is `live`, `archived` or `missing`, and `note` says why. `--limit N` looks at N images per run, and `--retry` looks again for the missing ones. Requests to the Wayback Machine are paced by `--rate` (default 0.2 per second), a few at a time since it answers slowly; each image takes one or two. Expect a few hours for about 1,400 images. The site shows the copy kept, wherever a signature embeds its URL, and the URL itself when there's none.
+`status` is `live`, `archived` or `missing`, and `note` says why. `--limit N` looks at N images per run, and `--retry` looks again for the missing ones. Requests to the Wayback Machine are paced by `--rate` (default 0.2 per second), several at a time since it answers slowly; each image takes one or two. The site shows the copy kept, wherever a signature or a post embeds its URL, and the URL itself when there's none.
 
-Texts other than signatures can be added to `content.images.SCOPES` (posts, later), and boards can add their own: `tapascrape metanet images` also reads the forumer-era signatures the Metanet site shows.
+Posts embed about ten times as many images as signatures. On Metanet that's 14,700 against 1,400, which is about a day of requests at the default rate and a few hundred MB of copies. `--no-posts` leaves them out: their images aren't looked for, but the counts of earlier runs stay, so a later run without it carries on.
+
+More places can be added to `content.images.SCOPES`, each with a column counting its uses. Boards can add texts of their own: `tapascrape metanet images` also reads the forumer-era signatures and posts the Metanet site shows.
 
 ## Quotes
 
@@ -219,7 +221,7 @@ tapascrape metanet link --db sqlite:///metanet.db   # old ids -> ours; stores th
 tapascrape metanet attachments --db sqlite:///metanet.db   # archived act=Attach downloads (Wayback)
 tapascrape metanet avatars --db sqlite:///metanet.db       # forumer-era avatars -> forumer_avatars (Wayback)
 tapascrape metanet quotes --db sqlite:///metanet.db        # `quotes`, also knowing forumer-era names
-tapascrape metanet images --db sqlite:///metanet.db        # `images`, forumer-era signatures too (resumable)
+tapascrape metanet images --db sqlite:///metanet.db        # `images`, forumer-era signatures and posts too
 tapascrape metanet site --db sqlite:///metanet.db --out site   # `site`, with what only the dump has
 ```
 

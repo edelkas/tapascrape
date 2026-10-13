@@ -2,8 +2,10 @@
 
 Image hosts prune old files (ImageShack, TinyPic and Photobucket's free
 albums), and whole sites go. Each distinct URL embedded where SCOPES look
-(signatures, for now; boards can add texts of their own) gets a row with a
-stable id of ours, and the site shows the copy kept instead of the URL.
+(signatures and posts; boards can add texts of their own) gets a row with a
+stable id of ours, and the site shows the copy kept instead of the URL. Each
+scope's uses are counted apart, so leaving posts out of a run neither looks for
+their images nor forgets them.
 Smileys and forumer uploads aren't included: `smilies` and `attachments` have
 them.
 
@@ -14,7 +16,8 @@ got):
    JPEG or BMP, not an HTML page or one cut short). Hosts redirect to where
    files moved (deviantART), but also to an "image not found" picture.
 2. The Wayback Machine's captures of the URL that were images, one per change
-   of content, with their digests (SHA-1 of the file).
+   of content, with their digests (SHA-1 of the file). A folder holding several
+   of the images (a Photobucket album, say) is listed with a single query.
 3. The decision:
    - a live copy that is byte for byte the oldest capture is kept;
    - else the oldest capture that is a whole image: hosts alter, overwrite and
@@ -48,8 +51,8 @@ from tapascrape.crawl.progress import Progress
 from tapascrape.db.base import Database
 from tapascrape.net.http import fetch_final
 from tapascrape.net.throttle import RetryableError, Throttle
-from tapascrape.net.wayback import (URL_SAFE, Capture, fetch_capture, image_captures, image_type,
-                                    payload_digest)
+from tapascrape.net.wayback import (URL_SAFE, Capture, fetch_capture, folder_image_captures,
+                                    image_captures, image_type, payload_digest)
 from tapascrape.parse.bbcode import html_to_bbcode
 
 log = logging.getLogger(__name__)
@@ -60,7 +63,8 @@ PLACEHOLDER_NAMES = 3      # file names a picture is served for to be a host's s
 MAX_CAPTURES = 3           # archived versions tried per image
 LIVE_RATE = 2.0            # requests per second to each image host
 LIVE_WORKERS = 8           # image hosts asked at once
-ARCHIVE_WORKERS = 4        # Wayback Machine requests at once (it answers slowly; --rate still holds)
+ARCHIVE_WORKERS = 8        # Wayback Machine requests at once (it answers slowly; --rate still holds)
+FOLDER_IMAGES = 3          # images in a folder to list its captures at once rather than one by one
 LIVE_FAILURES = 3          # unreachable answers in a row before a host is given up on
 ARCHIVE_FAILURES = 3       # failed Wayback lookups in a row before the pass stops
 MOVED = "moved to "        # `live` of an image a redirect led to another file for
@@ -106,6 +110,22 @@ def file_name(url: str) -> str:
     return f"{name}?{parts.query}" if parts.query else name
 
 
+def folder_of(url: str) -> str | None:
+    """The folder a URL's file is in, if it's below a host's root (whose listing would be
+    a whole image host's)."""
+    parts = urlsplit(url)
+    folder = parts.path.rsplit("/", 1)[0]
+    return f"{parts.scheme}://{parts.netloc}{folder}/" if folder.strip("/").count("/") >= 1 else None
+
+
+def capture_key(url: str) -> str:
+    """What tells a URL from another in the Wayback Machine (it ignores the scheme, www.,
+    default ports and case)."""
+    rest = unquote(url).lower().split("://", 1)[-1]
+    host, slash, path = rest.partition("/")
+    return host.removeprefix("www.").removesuffix(":80") + slash + path
+
+
 def request_url(url: str) -> str:
     """`url` as it can be requested (spaces and other characters percent-encoded)."""
     return quote(url, safe=URL_SAFE)
@@ -122,8 +142,26 @@ def signature_texts(db: Database) -> Iterator[str]:
             yield text
 
 
-# scope -> its texts; the scopes the `images` command reads.
-SCOPES: dict[str, Callable[[Database], Iterable[str]]] = {"signatures": signature_texts}
+def post_texts(db: Database, batch: int = 5000) -> Iterator[str]:
+    """Posts, as the site shows them (fixed BBCode, else the source, else rebuilt from the HTML)."""
+    last = -1
+    while True:
+        rows = db.query("SELECT id, source_fixed, source, content FROM posts WHERE id > ? "
+                        "ORDER BY id LIMIT ?", (last, batch))
+        if not rows:
+            return
+        last = rows[-1][0]
+        for _, fixed, source, content in rows:
+            if fixed is not None or source is not None:
+                yield fixed if fixed is not None else source
+            elif content and "<img" in content.lower():
+                yield html_to_bbcode(content)
+
+
+# scope -> its texts, and the column counting its uses.
+SCOPES: dict[str, Callable[[Database], Iterable[str]]] = {"signatures": signature_texts,
+                                                          "posts": post_texts}
+SCOPE_USES = {"signatures": "signature_uses", "posts": "post_uses"}
 
 
 def embedded_urls(text: str) -> Iterator[str]:
@@ -138,29 +176,36 @@ def embedded_urls(text: str) -> Iterator[str]:
 
 def collect_images(db: Database, texts: dict[str, Iterable[str]]) -> int:
     """Add a row for every image embedded in `texts` (scope -> BBCode texts); refresh
-    where and how often each is used. Existing rows keep their ids; new ones get the
-    next ids, most used first. Returns the number of new images."""
-    uses: Counter = Counter()
-    scopes: dict[str, set[str]] = defaultdict(set)
+    how often each is used in those scopes (the others' counts stay). Existing rows
+    keep their ids; new ones get the next ids, most used first. Returns the number of
+    new images."""
+    found: dict[str, Counter] = {}
     for scope, items in texts.items():
-        for text in items:
-            for url in embedded_urls(text):
-                uses[url] += 1
-                scopes[url].add(scope)
-    known = dict(db.query("SELECT url, id FROM embedded_images"))
-    next_id = max(known.values(), default=0) + 1
-    updates = [{"id": image_id, "uses": uses[url], "used_in": ",".join(sorted(scopes[url])) or None}
-               for url, image_id in known.items()]
+        log.info("images: reading %s", scope)
+        found[scope] = Counter(url for text in items for url in embedded_urls(text))
+    columns = ", ".join(SCOPE_USES.values())
+    known = {url: (image_id, dict(zip(SCOPE_USES, counts))) for url, image_id, *counts in db.query(
+        f"SELECT url, id, {columns} FROM embedded_images")}
+    next_id = max((image_id for image_id, _ in known.values()), default=0) + 1
+
+    def counts(old: dict[str, int | None], url: str) -> dict:
+        uses = {scope: found[scope][url] if scope in found else old.get(scope) or 0
+                for scope in SCOPE_USES}
+        return {**{SCOPE_USES[scope]: n for scope, n in uses.items()}, "uses": sum(uses.values()),
+                "used_in": ",".join(sorted(scope for scope, n in uses.items() if n)) or None}
+
+    updates = [{"id": image_id, **counts(old, url)} for url, (image_id, old) in known.items()]
+    new = {url for counter in found.values() for url in counter} - set(known)
     inserts = []
-    for url in sorted(set(uses) - set(known), key=lambda url: (-uses[url], url)):
-        inserts.append({"id": next_id, "url": url, "host": host_of(url), "uses": uses[url],
-                        "used_in": ",".join(sorted(scopes[url]))})
+    for url in sorted(new, key=lambda url: (-sum(c[url] for c in found.values()), url)):
+        inserts.append({"id": next_id, "url": url, "host": host_of(url), **counts({}, url)})
         next_id += 1
     with db.transaction():
         db.update_many("embedded_images", updates)
         db.upsert_many("embedded_images", inserts)
-    log.info("images: %d distinct embedded (%d new), %d uses", len(uses), len(inserts),
-             sum(uses.values()))
+    for scope, counter in found.items():
+        log.info("images: %d distinct embedded in %s, %d uses", len(counter), scope, counter.total())
+    log.info("images: %d new", len(inserts))
     return len(inserts)
 
 
@@ -317,23 +362,55 @@ def look_up_captures(db: Database, rows: list[tuple[int, str]], throttle: Thrott
     Machine stopped answering (the rest is left for the next run)."""
     if not rows:
         return True
+    by_folder: dict[str | None, list[tuple[int, str]]] = defaultdict(list)
+    for image_id, url in rows:
+        by_folder[folder_of(url)].append((image_id, url))
+    # (folder or None, its images): a folder's are listed with one query, others one by one
+    tasks = [(None, [row]) for row in by_folder.pop(None, [])]
+    for folder, items in by_folder.items():
+        tasks += [(folder, items)] if len(items) >= FOLDER_IMAGES else [(None, [row]) for row in items]
+
+    def look_up(task):
+        folder, items = task
+        if folder is None:
+            return {items[0][0]: image_captures(items[0][1], throttle)}
+        listed = folder_image_captures(folder, throttle)
+        if listed is None:
+            return None  # too big a folder
+        by_key: dict[str, list[Capture]] = defaultdict(list)
+        for capture in listed:
+            versions = by_key[capture_key(capture.original)]
+            if not versions or versions[-1].digest != capture.digest:
+                versions.append(capture)
+        return {image_id: by_key.get(capture_key(url), []) for image_id, url in items}
+
     progress = Progress("images: Wayback Machine lookups", len(rows))
     archived = failures = 0
-    with closing(in_parallel(lambda row: image_captures(row[1], throttle), rows, ARCHIVE_WORKERS)) as done:
-        for (image_id, url), captures in done:
-            if isinstance(captures, RetryableError):
-                failures += 1
-                log.warning("images: looking up %s failed (%s)", url, captures)
-                if failures >= ARCHIVE_FAILURES:
-                    log.error("images: the Wayback Machine isn't answering; rerun later to continue")
-                    return False
-                continue
-            failures = 0
-            archived += bool(captures)
-            with db.transaction():
-                db.update_many("embedded_images", [{"id": image_id, "captures": json.dumps(
-                    [[c.timestamp, c.original, c.digest] for c in captures])}])
-            progress.advance(detail=f"{archived:,} archived")
+    while tasks:
+        retry_one_by_one = []
+        with closing(in_parallel(look_up, tasks, ARCHIVE_WORKERS)) as done:
+            for (folder, items), found in done:
+                if found is None:
+                    log.info("images: %s has too many captures to list; looking up its images one by one",
+                             folder)
+                    retry_one_by_one += [(None, [row]) for row in items]
+                    continue
+                if isinstance(found, RetryableError):
+                    failures += 1
+                    log.warning("images: looking up %s failed (%s)", folder or items[0][1], found)
+                    if failures >= ARCHIVE_FAILURES:
+                        log.error("images: the Wayback Machine isn't answering; rerun later to continue")
+                        return False
+                    continue
+                failures = 0
+                archived += sum(bool(captures) for captures in found.values())
+                with db.transaction():
+                    db.update_many("embedded_images", [
+                        {"id": image_id, "captures": json.dumps([[c.timestamp, c.original, c.digest]
+                                                                 for c in captures])}
+                        for image_id, captures in found.items()])
+                progress.advance(len(found), detail=f"{archived:,} archived")
+        tasks = retry_one_by_one
     return True
 
 
@@ -450,16 +527,18 @@ def _decide(live: str, live_digest: str | None, rows: list[list[str]], stand_ins
 
 # -- all together --------------------------------------------------------------------------------
 
-def recover_images(db: Database, throttle: Throttle, retry: bool = False,
-                   limit: int | None = None) -> Counter:
-    """Look for a copy of each embedded image not decided yet (resumable); `retry` looks
-    again for the ones found nowhere. `limit`: at most that many images this run."""
+def recover_images(db: Database, throttle: Throttle, scopes: Iterable[str] | None = None,
+                   retry: bool = False, limit: int | None = None) -> Counter:
+    """Look for a copy of each image embedded in `scopes` (default: all) not decided yet
+    (resumable); `retry` looks again for the ones found nowhere. `limit`: at most that
+    many images this run."""
+    used = " OR ".join(f"{SCOPE_USES[scope]} > 0" for scope in (scopes or SCOPE_USES))
     if retry:
         with db.transaction():
             db.execute("UPDATE embedded_images SET live = NULL, live_digest = NULL, captures = NULL, "
-                       "status = NULL, note = NULL WHERE status = 'missing'")
+                       f"status = NULL, note = NULL WHERE status = 'missing' AND ({used})")
     pending = db.query("SELECT id, url, live IS NULL, captures IS NULL FROM embedded_images "
-                       "WHERE status IS NULL ORDER BY id")[:limit]
+                       f"WHERE status IS NULL AND ({used}) ORDER BY id")[:limit]
     if not pending:
         log.info("images: nothing to look for")
         return Counter()
@@ -471,7 +550,8 @@ def recover_images(db: Database, throttle: Throttle, retry: bool = False,
     return decide(db, [image_id for image_id, *_ in pending], throttle)
 
 
-def image_counts(db: Database) -> list[tuple[str, int, int]]:
-    """(status, images, uses) of every embedded image."""
-    return db.query("SELECT COALESCE(status, 'not looked for yet'), COUNT(*), SUM(uses) "
-                    "FROM embedded_images GROUP BY 1 ORDER BY 1")
+def image_counts(db: Database) -> dict[str, list[tuple[str, int, int]]]:
+    """Scope -> (status, images, uses) of the images embedded there."""
+    return {scope: db.query(f"SELECT COALESCE(status, 'not looked for yet'), COUNT(*), SUM({column}) "
+                            f"FROM embedded_images WHERE {column} > 0 GROUP BY 1 ORDER BY 1")
+            for scope, column in SCOPE_USES.items()}

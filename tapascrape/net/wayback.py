@@ -101,6 +101,21 @@ def image_captures(url: str, throttle: Throttle, limit: int = 200) -> list[Captu
     return [Capture(*row) for row in rows[1:] if len(row) == 4]
 
 
+def folder_image_captures(folder: str, throttle: Throttle, limit: int = 20000) -> list[Capture] | None:
+    """Captures of every URL under `folder` archived as images with HTTP 200, by URL and
+    then oldest first; None if there are more than `limit` (too big to list at once)."""
+    query = urllib.parse.urlencode([
+        ("url", urllib.parse.quote(folder.split("://", 1)[-1], safe=URL_SAFE)), ("matchType", "prefix"),
+        ("output", "json"), ("fl", "original,timestamp,mimetype,digest"), ("filter", "statuscode:200"),
+        ("filter", "mimetype:image/.*"), ("limit", str(limit + 1)),
+    ])
+    body = fetch_bytes(f"{CDX_URL}?{query}", throttle, timeout=300, max_retries=MAX_RETRIES,
+                       user_agent=USER_AGENT)
+    rows = json.loads(body) if body and body.strip() else []
+    captures = [Capture(*row) for row in rows[1:] if len(row) == 4]
+    return captures if len(captures) <= limit else None
+
+
 def prefix_captures(prefix: str, throttle: Throttle, page_size: int = 50000,
                     original: str | None = None) -> list[Capture]:
     """Every capture archived with HTTP 200 of the URLs starting with `prefix`.

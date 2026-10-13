@@ -149,8 +149,10 @@ EMBEDDED_IMAGES = Table("embedded_images", (
     Column("id", INT, nullable=False),
     Column("url", TEXT, nullable=False),   # as embedded, normalized (content.images.image_url)
     Column("host", TEXT),
-    Column("used_in", TEXT),               # where it's embedded, e.g. "signatures"
+    Column("used_in", TEXT),               # where it's embedded: "signatures", "posts" or both
     Column("uses", INT),
+    Column("signature_uses", INT),
+    Column("post_uses", INT),
     Column("live", TEXT),                  # the original host's answer: "ok" or why not; NULL: not asked
     Column("live_digest", TEXT),           # of the image it served (base32 SHA-1, as Wayback's CDX)
     Column("captures", LONGTEXT),          # JSON [[timestamp, url, digest], ...]: Wayback Machine

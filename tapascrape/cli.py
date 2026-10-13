@@ -282,17 +282,22 @@ def cmd_attachments(args: argparse.Namespace) -> int:
 def run_images(args: argparse.Namespace, texts: dict) -> int:
     with open_database(args.db) as db:
         db.create_schema()
-        collect_images(db, texts(db))
+        texts = texts(db)
+        collect_images(db, texts)
         if not args.no_fetch:
-            report = recover_images(db, Throttle(args.rate), retry=args.retry, limit=args.limit)
+            report = recover_images(db, Throttle(args.rate), scopes=texts, retry=args.retry,
+                                    limit=args.limit)
             print_report_counts(report)
-        for status, count, uses in image_counts(db):
-            print(f"{status:>18}: {count:,} images ({uses or 0:,} uses)")
+        for scope, rows in image_counts(db).items():
+            print(f"in {scope}{'' if scope in texts else ' (left out this run)'}:")
+            for status, count, uses in rows:
+                print(f"{status:>20}: {count:,} images ({uses or 0:,} uses)")
     return 0
 
 
 def cmd_images(args: argparse.Namespace) -> int:
-    return run_images(args, lambda db: {scope: SCOPES[scope](db) for scope in SCOPES})
+    scopes = [scope for scope in SCOPES if not (scope == "posts" and args.no_posts)]
+    return run_images(args, lambda db: {scope: SCOPES[scope](db) for scope in scopes})
 
 
 def cmd_avatars(args: argparse.Namespace) -> int:
@@ -377,9 +382,9 @@ def cmd_metanet_avatars(args: argparse.Namespace) -> int:
 
 
 def cmd_metanet_images(args: argparse.Namespace) -> int:
-    from tapascrape.boards.metanet.images import metanet_signature_texts
+    from tapascrape.boards.metanet.images import metanet_texts
 
-    return run_images(args, lambda db: {"signatures": metanet_signature_texts(db)})
+    return run_images(args, lambda db: metanet_texts(db, posts=not args.no_posts))
 
 
 def cmd_metanet_quotes(args: argparse.Namespace) -> int:
@@ -564,7 +569,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="look again for attachments previously found nowhere")
     p.set_defaults(func=cmd_attachments)
 
-    p = sub.add_parser("images", help="list images embedded with [img] in signatures in the "
+    p = sub.add_parser("images", help="list images embedded with [img] in signatures and posts in the "
                                       "embedded_images table and keep copies: the original host's, "
                                       "checked against the Wayback Machine's (resumable)")
     p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
@@ -574,6 +579,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--retry", action="store_true",
                    help="look again for images previously found nowhere")
     p.add_argument("--limit", type=int, metavar="N", help="look for at most N images this run")
+    p.add_argument("--no-posts", action="store_true",
+                   help="only signatures' images: posts embed about ten times as many (a much "
+                        "longer run and a bigger database)")
     p.set_defaults(func=cmd_images)
 
     p = sub.add_parser("avatars", help="re-download stored avatars as originals (not Cloudflare's "
@@ -626,7 +634,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", required=True, metavar="DIR", help="folder to write it to")
     p.add_argument("--title", default="Metanet Forums", help="the board's name, atop every page")
     p.set_defaults(func=cmd_metanet_site)
-    p = metanet.add_parser("images", help="`images`, also for the forumer signatures the site shows "
+    p = metanet.add_parser("images", help="`images`, also for the forumer signatures and posts the site shows "
                                           "(resumable); run after import-dump and link")
     p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
     p.add_argument("--rate", type=float, default=0.2,
@@ -635,6 +643,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--retry", action="store_true",
                    help="look again for images previously found nowhere")
     p.add_argument("--limit", type=int, metavar="N", help="look for at most N images this run")
+    p.add_argument("--no-posts", action="store_true",
+                   help="only signatures' images: posts embed about ten times as many (a much "
+                        "longer run and a bigger database)")
     p.set_defaults(func=cmd_metanet_images)
     for name, func, help, retry in (
             ("attachments", cmd_metanet_attachments,

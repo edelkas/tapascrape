@@ -571,3 +571,34 @@ def test_link_archive_positions(db):
     # maestro's, whatever its position; position 2 is a nameless guest's
     assert db.query("SELECT position, post_id FROM forumer_archive_posts ORDER BY position") == [
         (0, 1), (1, None), (2, 3)]
+
+
+def test_metanet_image_texts():
+    from tapascrape.boards.metanet.images import metanet_texts
+    from tapascrape.content.images import embedded_urls
+
+    with open_database(":memory:") as db:
+        db.create_schema()
+        db.create_schema(TABLES)
+        db.upsert_many("topics", [{"id": 5, "forum_id": 1, "name": "On Tapatalk", "stickied": False,
+                                   "locked": False}])
+        db.upsert_many("posts", [{"id": 1, "topic_id": 5, "index": 1, "source": "[img]http://a.com/t.png[/img]"}])
+        db.upsert_many("users", [{"id": 7, "name": "wedgie", "signature": ""},
+                                 {"id": 8, "name": "kab", "signature": "x"}])
+        db.update_many("users", [{"id": 8, "signature_fixed": "[img]http://a.com/k.png[/img]"}])
+        db.upsert_many("forumer_members", [
+            {"old_id": 520, "name": "wedgie", "user_id": 7, "signature": "<img src='http://a.com/alumni.png'>"},
+            {"old_id": 534, "name": "kab", "user_id": 8, "signature": "<img src='http://a.com/old.png'>"}])
+        db.upsert_many("forumer_posts", [
+            {"id": 10, "topic_id": 5, "post_id": 1, "html": "<img src='http://a.com/mapped.png'>"},
+            {"id": 11, "topic_id": 6, "post_id": None, "html": "<img src='http://a.com/lost.png'>"},
+            {"id": 12, "topic_id": 6, "post_id": None, "html": "no images"}])
+
+        def urls(texts):
+            return sorted(url for text in texts for url in embedded_urls(text))
+
+        texts = metanet_texts(db)
+        # the forumer signature only where Tapatalk has none; forumer posts only where Tapatalk has no topic
+        assert urls(texts["signatures"]) == ["http://a.com/alumni.png", "http://a.com/k.png"]
+        assert urls(texts["posts"]) == ["http://a.com/lost.png", "http://a.com/t.png"]
+        assert list(metanet_texts(db, posts=False)) == ["signatures"]
