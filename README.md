@@ -223,6 +223,7 @@ tapascrape metanet avatars --db sqlite:///metanet.db       # forumer-era avatars
 tapascrape metanet quotes --db sqlite:///metanet.db        # `quotes`, also knowing forumer-era names
 tapascrape metanet images --db sqlite:///metanet.db        # `images`, forumer-era signatures and posts too
 tapascrape metanet site --db sqlite:///metanet.db --out site   # `site`, with what only the dump has
+tapascrape metanet stats --db sqlite:///metanet.db   # what the site shows, by source (--markdown FILE)
 ```
 
 Both commands can be rerun, and they log their progress. `import-dump` skips the dumps' error, login-only and parked-domain pages. It understands the board's skins, which use different date formats. It rebuilds the `forumer_*` rows from what it reads, so always give it every dump. After importing, run the commands below it again, in order. Opening a file is slow on some disks (about 0.1 s each), so both commands read 16 files at a time. A full import took 2 minutes with the files in the disk cache; reading them cold should take under 20 minutes.
@@ -320,6 +321,8 @@ Images are checked to be images. Outcomes are recorded as `forumer-avatar:<old i
 - **Alert and question topics** get the `A` and `Q` flags, from forumer's `!` and `?` icons.
 
 The profile fields are personal data, as noted above, so mind them before publishing the site.
+
+`tapascrape metanet stats` counts what the site shows and where each thing comes from, following the same rules. For forums, topics, posts, members, avatars, polls, attachments and smileys, it gives how many are shown, how many Tapatalk and Forumer have, how many only one of them has, and how many both have. Something both have counts once, as matched by `link`. What's shown isn't always both sources together: posts of the dump that `link` couldn't match, in topics Tapatalk has, aren't shown, for instance. More tables break each down: topic flags and descriptions, how posts and members were matched, guests' names, signatures and profile details, avatar files, attachment and embedded image copies by origin, smileys by host, quotes and the files kept. It prints the tables, or writes them to a Markdown file with `--markdown FILE`. It takes a few seconds and writes nothing to the database. Profile details are only counted.
 
 ## Login
 

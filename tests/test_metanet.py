@@ -602,3 +602,66 @@ def test_metanet_image_texts():
         assert urls(texts["signatures"]) == ["http://a.com/alumni.png", "http://a.com/k.png"]
         assert urls(texts["posts"]) == ["http://a.com/lost.png", "http://a.com/t.png"]
         assert list(metanet_texts(db, posts=False)) == ["signatures"]
+
+
+def test_metanet_stats():
+    from tapascrape.boards.metanet.stats import metanet_stats
+
+    with open_database(":memory:") as db:
+        db.create_schema()
+        db.create_schema(TABLES)
+        db.upsert_many("forums", [{"id": 1, "name": "Both"}, {"id": 2, "name": "Tapatalk's"}])
+        db.upsert_many("forumer_forums", [{"id": 1, "name": "Both", "in_tapatalk": True},
+                                          {"id": 3, "name": "N Webcomics", "in_tapatalk": False}])
+        db.upsert_many("topics", [
+            {"id": 10, "forum_id": 1, "name": "a", "stickied": True, "locked": False, "has_poll": True},
+            {"id": 11, "forum_id": 2, "name": "b", "stickied": False, "locked": True, "has_poll": False}])
+        db.upsert_many("forumer_topics", [
+            {"id": 10, "forum_id": 1, "description": "d", "alert": True, "pinned": True, "has_poll": None},
+            {"id": 12, "forum_id": 3, "description": None, "alert": None, "pinned": True, "has_poll": True}])
+        db.upsert_many("posts", [{"id": 100, "topic_id": 10, "user_id": 1, "index": 1},
+                                 {"id": 101, "topic_id": 10, "user_id": 0, "index": 2},
+                                 {"id": 102, "topic_id": 11, "user_id": 2, "index": 1}])
+        db.upsert_many("forumer_posts", [
+            {"id": 1000, "topic_id": 10, "post_id": 100, "match": "time", "member_id": 50, "author": "alice", "html": "x"},
+            {"id": 1001, "topic_id": 10, "post_id": 101, "match": "time", "member_id": None, "author": "Bob", "html": "x"},
+            {"id": 1002, "topic_id": 12, "post_id": None, "match": None, "member_id": 51, "author": "bob2", "html": "x"},
+            {"id": 1003, "topic_id": 10, "post_id": None, "match": None, "member_id": 50, "author": "alice", "html": "x"}])
+        db.upsert_many("forumer_archive_posts", [{"topic_id": 11, "position": 0, "author": "bob2", "post_id": 102}])
+        db.upsert_many("users", [{"id": 0, "name": "Guest"}, {"id": 1, "name": "alice"}, {"id": 2, "name": "2"},
+                                 {"id": 3, "name": "carol"}])
+        db.upsert_many("forumer_members", [
+            {"old_id": 50, "name": "alice", "user_id": 1, "match": "name", "listed": True},
+            {"old_id": 51, "name": "bob2", "user_id": 2, "match": "position", "listed": True},
+            {"old_id": 52, "name": "gone", "user_id": None, "match": None, "listed": False}])
+        avatar = db.insert("avatars", {"user_id": 1, "data": b"A"})
+        db.update_many("users", [{"id": 1, "avatar_id": avatar}])
+        db.upsert_many("forumer_avatars", [{"old_id": 50, "data": b"A"}, {"old_id": 52, "data": b"B"}])
+        db.upsert_many("polls", [{"topic_id": 10, "vote_count": 3}])
+        db.upsert_many("forumer_polls", [{"topic_id": 12, "vote_count": 5}])
+        tables = {table.title: table for table in metanet_stats(db)}
+
+    def rows(title):
+        return {row[0]: row[1:] for row in tables[title].rows}
+
+    # shown, Tapatalk, Forumer, Tapatalk only, Forumer only, both
+    assert rows("Overview") == {
+        "Forums": [3, 2, 2, 1, 1, 1], "Topics": [3, 2, 3, 0, 1, 2],
+        "Posts": [4, 3, 5, 0, 2, 3],  # the unmatched copy in a topic Tapatalk has isn't shown
+        "Members": [4, 3, 3, 1, 1, 2], "Members with an avatar": [2, 1, 2, 0, 1, 1],
+        "Polls": [2, 1, 1, 1, 1, 0], "Attachments": [0, 0, 0, 0, 0, 0], "Smileys": [0, 0, 0, 0, 0, 0]}
+    assert rows("Forums only one source has") == {"Tapatalk's": [2, "Tapatalk", 1],
+                                                  "N Webcomics": [3, "Forumer", 1]}
+    topics = rows("Topics")
+    assert topics["Pinned"] == [2, 1, 2, 0, 1, 1]  # Forumer's pin shows only where Tapatalk lacks the topic
+    assert topics["Flag A: alert"] == [1, 0, 1, 0, 1, 0]
+    assert rows("Posts")["By guests, with their name"][0] == 1
+    copies = rows("Forumer's copies of posts")
+    assert copies["  not matched, in topics Tapatalk lacks (shown)"] == [1]
+    assert copies["  not matched, in topics Tapatalk has (not shown)"] == [1]
+    members = rows("Forumer's members")
+    assert members["  not matched: pruned before the migration"] == [1]
+    assert members["Tapatalk users only known by their id, named by Forumer"] == [1]
+    avatars = rows("Avatars")
+    assert avatars["  the same file as their Tapatalk avatar"] == [1]
+    assert avatars["Avatar images shown"] == [2]

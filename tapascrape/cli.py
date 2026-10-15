@@ -387,6 +387,23 @@ def cmd_metanet_images(args: argparse.Namespace) -> int:
     return run_images(args, lambda db: metanet_texts(db, posts=not args.no_posts))
 
 
+def cmd_metanet_stats(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from tapascrape.boards.metanet.stats import metanet_stats
+    from tapascrape.tables import as_markdown, as_text
+
+    with open_database(args.db) as db:
+        tables = metanet_stats(db)
+    if args.markdown:
+        Path(args.markdown).write_text(as_markdown(tables, "Metanet Forums: what the site shows"),
+                                       encoding="utf-8")
+        print(f"wrote {args.markdown}")
+    else:
+        print(as_text(tables))
+    return 0
+
+
 def cmd_metanet_quotes(args: argparse.Namespace) -> int:
     from tapascrape.boards.metanet.quotes import link_metanet_quotes
 
@@ -624,6 +641,12 @@ def build_parser() -> argparse.ArgumentParser:
                                         "store the attachment files it has")
     p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
     p.set_defaults(func=cmd_metanet_link)
+    p = metanet.add_parser("stats", help="count what the site shows (forums, topics, posts, members, "
+                                         "avatars, polls, attachments, smileys, images...) and which "
+                                         "source has it: Tapatalk, Forumer or both; writes nothing")
+    p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
+    p.add_argument("--markdown", metavar="FILE", help="write the tables to FILE as Markdown instead")
+    p.set_defaults(func=cmd_metanet_stats)
     p = metanet.add_parser("quotes", help="`quotes`, also knowing the names members and guests had "
                                           "on forumer; run after link")
     p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
