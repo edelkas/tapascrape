@@ -15,7 +15,8 @@ topic has a single post in that time window, that's it ("interpolated").
 
 Attachments: forumer's act=Attach&id=N used the post's own id as N, so a
 mapped post ties its attachment box (original name, downloads) to the
-attachments row of the file its migrated source links.
+attachments row of the file its migrated source links, or else to the
+act=Attach row of that id.
 """
 
 import bisect
@@ -307,8 +308,10 @@ def link_attachments(db: Database) -> Counter:
         if kind == "image":
             found = canonical(ref)
             attachment_id = by_url.get(found.url) if found else None
-        else:
+        else:  # its post's upload, else the act=Attach row of the same id
             attachment_id = post_upload(owners.get(old_post_id), by_url)
+            if attachment_id is None and ref.isdigit() and by_attach_id.get(int(ref)):
+                attachment_id = min(by_attach_id[int(ref)])
         updates.append({"old_post_id": old_post_id, "ref": ref, "attachment_id": attachment_id,
                         "content_type": image_type(data) if data else None})
         report["attachments tied to a file of ours" if attachment_id else "attachments not tied"] += 1

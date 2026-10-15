@@ -8,6 +8,11 @@ to: the linked post's, or else the only post with a still-missing upload in
 the time window the id falls in (old ids grow with time), when the archived
 file name says it's the same kind of file.
 
+The attachment boxes of posts only the dump has hold files Tapatalk's posts
+never referenced, so `attachments` never listed them: they get rows of their
+own first (with uses = 0), and are looked for like the others (uploads by
+the generic recovery, act=Attach downloads here).
+
 Avatars: forumer kept uploaded avatars as uploads/metanet/av-<member id>.<ext>;
 others were links to image hosts. The dump says which one each member had last.
 """
@@ -21,6 +26,7 @@ from tapascrape.boards.metanet.link import TimeScale, post_upload
 from tapascrape.boards.metanet.schema import TABLES
 from tapascrape.content.attachments import (MISSING_PREFIX, canonical, filename_from, header,
                                             valid_download)
+from tapascrape.content.attachments import recover_attachments as recover_files
 from tapascrape.db.base import Database
 from tapascrape.net.throttle import RetryableError, Throttle
 from tapascrape.net.wayback import (Capture, fetch_archived_image, fetch_capture, image_type,
@@ -53,9 +59,46 @@ def attach_captures(throttle: Throttle) -> dict[int, list[Capture]]:
     return by_id
 
 
+def register_forumer_attachments(db: Database) -> int:
+    """Give the files in the attachment boxes of posts only the dump has (that Tapatalk lacks)
+    rows of `attachments`, and tie the boxes to them. Returns the number of new rows."""
+    boxes = db.query(
+        "SELECT a.old_post_id, a.ref, a.kind, a.name, a.data, a.source_file FROM forumer_attachments a "
+        "JOIN forumer_posts f ON f.id = a.old_post_id WHERE a.attachment_id IS NULL AND f.post_id IS NULL")
+    by_url = dict(db.query("SELECT url, id FROM attachments"))
+    next_id = max(by_url.values(), default=0) + 1
+    inserts, ties = [], []
+    for old_post_id, ref, kind, name, data, source_file in boxes:
+        if kind == "image":
+            found = canonical(ref)
+        else:
+            found = canonical(f"{BOARD_PAGES}?act=Attach&type=post&id={ref}") if ref.isdigit() else None
+        if found is None:
+            continue
+        if found.url not in by_url:
+            inserts.append({
+                "id": next_id, "kind": found.kind, "url": found.url, "name": found.name or name,
+                "old_forum_id": found.old_forum_id, "uploaded_at": found.uploaded_at,
+                "old_attach_id": found.old_attach_id, "first_post_id": None, "uses": 0,
+                "data": data, "size": len(data) if data else None,
+                "content_type": image_type(data) if data else None,
+                "recovered_from": f"forumer-dump:{source_file}" if data else None})
+            by_url[found.url] = next_id
+            next_id += 1
+        ties.append({"old_post_id": old_post_id, "ref": ref, "attachment_id": by_url[found.url]})
+    with db.transaction():
+        db.upsert_many("attachments", inserts)
+        db.update_many("forumer_attachments", ties)
+    log.info("attachments: %d files of posts only the dump has, %d new", len(ties), len(inserts))
+    return len(inserts)
+
+
 def recover_attachments(db: Database, throttle: Throttle, retry: bool = False,
                         max_captures: int = 3) -> Counter:
     db.create_schema(TABLES)
+    report: Counter = Counter({"files of posts only the dump has, listed": register_forumer_attachments(db)})
+    # Uploads not looked for yet (the ones just listed): the generic recovery.
+    report["uploads recovered"] = recover_files(db, throttle)
     done = {} if retry else db.states(ATTACH_STATE)
     by_id = attach_captures(throttle)
     by_url = dict(db.query("SELECT url, id FROM attachments"))
@@ -72,9 +115,10 @@ def recover_attachments(db: Database, throttle: Throttle, retry: bool = False,
             "SELECT a.id, a.name, p.timestamp, p.id, p.source FROM attachments a "
             "JOIN posts p ON p.id = a.first_post_id WHERE a.kind = 'upload' AND a.data IS NULL")
         if post_id not in linked and post_upload(source, by_url) == attachment_id]
-    report: Counter = Counter()
     for attach_id in sorted(by_id):
-        if str(attach_id) in done:
+        # ids that had nothing missing may have now (rows of posts only the dump has)
+        if str(attach_id) in done and not (done[str(attach_id)] == "nothing missing" and db.query(
+                "SELECT 1 FROM attachments WHERE old_attach_id = ? AND data IS NULL", (attach_id,))):
             report["already looked at"] += 1
             continue
         targets, upload, guessed = _targets(db, attach_id, owners, by_url, scale, missing_uploads)
@@ -115,7 +159,7 @@ def recover_attachments(db: Database, throttle: Throttle, retry: bool = False,
                 db.delete_state(f"{MISSING_PREFIX}{target}")
             db.upsert_many("forumer_attachments", [{
                 "old_post_id": attach_id, "ref": str(attach_id), "kind": "file", "name": filename,
-                "attachment_id": upload}])
+                "attachment_id": upload if upload is not None else min(targets)}])
             db.set_state(f"{ATTACH_STATE}{attach_id}", "recovered" + (" (time window)" if guessed else ""))
         report["recovered" + (" by time window" if guessed else "")] += 1
         log.info("act=Attach id %d: recovered %s (%d bytes) -> attachments %s", attach_id,

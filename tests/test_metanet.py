@@ -665,3 +665,34 @@ def test_metanet_stats():
     avatars = rows("Avatars")
     assert avatars["  the same file as their Tapatalk avatar"] == [1]
     assert avatars["Avatar images shown"] == [2]
+
+
+def test_register_forumer_attachments():
+    from tapascrape.boards.metanet.link import link_attachments
+    from tapascrape.boards.metanet.recover import register_forumer_attachments
+
+    upload = "http://2.forumer.com/uploads/metanet/post-40-1169494524.png"
+    with open_database(":memory:") as db:
+        db.create_schema()
+        db.create_schema(TABLES)
+        db.upsert_many("attachments", [{"id": 7, "kind": "upload", "url": "http://2.forumer.com/uploads/metanet/a.txt",
+                                        "uses": 1}])
+        db.upsert_many("forumer_posts", [{"id": 900, "topic_id": 6, "post_id": None, "html": "x"},
+                                         {"id": 901, "topic_id": 5, "post_id": 1, "html": "x"}])
+        db.upsert_many("forumer_attachments", [
+            {"old_post_id": 900, "ref": upload, "kind": "image", "name": None, "data": None, "source_file": None},
+            {"old_post_id": 900, "ref": "900", "kind": "file", "name": "level.txt", "data": b"N level",
+             "source_file": "a.php"},
+            {"old_post_id": 901, "ref": "901", "kind": "file", "name": None, "data": None, "source_file": None}])
+        assert register_forumer_attachments(db) == 2
+        assert db.query("SELECT id, kind, url, name, old_forum_id, old_attach_id, uses, data, recovered_from "
+                        "FROM attachments WHERE id > 7 ORDER BY id") == [
+            (8, "attach-id", "http://metanet.2.forumer.com/index.php?act=Attach&type=post&id=900", "level.txt",
+             None, 900, 0, b"N level", "forumer-dump:a.php"),
+            (9, "upload", upload, "post-40-1169494524.png", 40, None, 0, None, None)]
+        ties = "SELECT old_post_id, ref, attachment_id FROM forumer_attachments ORDER BY old_post_id, ref"
+        expected = [(900, "900", 8), (900, upload, 9), (901, "901", None)]  # Tapatalk's posts: left alone
+        assert db.query(ties) == expected
+        assert register_forumer_attachments(db) == 0
+        link_attachments(db)  # relinking keeps them
+        assert db.query(ties) == expected

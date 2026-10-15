@@ -218,7 +218,7 @@ DUMPS="forumer_wayback_machine forumer_new_dump forumer_all_snapshots"
 tapascrape metanet import-dump $DUMPS --db sqlite:///metanet.db   # -> forumer_* tables
 tapascrape metanet topic-flags $DUMPS --db sqlite:///metanet.db   # polls, ! and ? icons (resumable)
 tapascrape metanet link --db sqlite:///metanet.db   # old ids -> ours; stores the dump's attachment files
-tapascrape metanet attachments --db sqlite:///metanet.db   # archived act=Attach downloads (Wayback)
+tapascrape metanet attachments --db sqlite:///metanet.db   # act=Attach downloads, files of dump-only posts (Wayback)
 tapascrape metanet avatars --db sqlite:///metanet.db       # forumer-era avatars -> forumer_avatars (Wayback)
 tapascrape metanet quotes --db sqlite:///metanet.db        # `quotes`, also knowing forumer-era names
 tapascrape metanet images --db sqlite:///metanet.db        # `images`, forumer-era signatures and posts too
@@ -295,11 +295,13 @@ Topics the dump has but Tapatalk doesn't keep their posts in `forumer_posts` (`p
 
 `link` also ties each `act=Attach&id=N` row of `attachments` to the upload row of post N, which is the same file. When only one of the two has the file, it copies it to the other.
 
-`metanet attachments` lists every archived `act=Attach` download, including the session-prefixed URLs (`index.php?s=…&act=Attach…`) that the generic `attachments` command can't see. For each one it fills:
+`metanet attachments` first gives the files in the attachment boxes of posts only the dump has (posts Tapatalk lacks) rows of `attachments`. Tapatalk's posts never referenced them, so `attachments` didn't list them. Their `uses` is 0, which tells them apart, and `link` ties the boxes to them. Uploads among them are looked for by the generic recovery (one listing of the upload folder, then each archived file). Downloads by id are looked for with the rest. The site then shows them in those posts, inline and in their attachment boxes.
+
+It then lists every archived `act=Attach` download, including the session-prefixed URLs (`index.php?s=…&act=Attach…`) that the generic `attachments` command can't see. For each one it fills:
 - the `act=Attach` row of that id;
 - the upload row of the post it belongs to. That is the linked post when there is one. Otherwise it is the only unlinked post in the id's time window whose upload is still missing, and only when the archived file name has the same extension (guesses that don't check out are dropped).
 
-Outcomes are recorded as `forumer-attach:<id>` in `crawl_state`. `--retry` looks again.
+Outcomes are recorded as `forumer-attach:<id>` in `crawl_state`. `--retry` looks again. Ids found to have nothing missing are looked at again once a row of theirs is.
 
 `metanet avatars` fills `forumer_avatars` with each member's last avatar on the old board:
 - Uploaded ones (`uploads/metanet/av-<old id>.<ext>`) come from a single listing of the archived uploads. The file the dump last saw is preferred, then the latest capture.
@@ -319,6 +321,7 @@ Images are checked to be images. Outcomes are recorded as `forumer-avatar:<old i
 - **Links to NUMA** (`numa.notdot.net`, now dead) go to its new home, `https://www.nmaps.net`, with the same path, keeping their text. Map pages lose their `/map` (`/map/85674` → `/85674`), and author searches become queries (`browse?sort=created&author=X` → `browse?sort=created&q=author:X`, other parameters kept). Images (`[img]`) are left alone.
 - **Polls** from the dump (`forumer_polls`, filled by `metanet topic-flags`). A poll only Tapatalk or only the dump has is shown as it is. When both have it, the copy with the most votes is shown, normally Tapatalk's, the later snapshot. Topics the dump shows a poll for get the `P` flag, even when the results weren't saved.
 - **Alert and question topics** get the `A` and `Q` flags, from forumer's `!` and `?` icons.
+- **A Statistics page** (`stats.html`), linked from every page's header next to Users: the tables of `metanet stats`, as of the build.
 
 The profile fields are personal data, as noted above, so mind them before publishing the site.
 

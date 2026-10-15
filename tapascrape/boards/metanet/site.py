@@ -18,6 +18,8 @@
   join the topic tables' flags.
 - Links to NUMA (numa.notdot.net, dead) go to its new home, nmaps.net
   (numa_url); their text stays as written.
+- A Statistics page (stats.html, linked from every page's header): the
+  tables of `metanet stats`, what the site shows and where it comes from.
 """
 
 import logging
@@ -27,6 +29,7 @@ from collections import defaultdict
 from html import unescape
 
 from tapascrape.boards.metanet.schema import TABLES
+from tapascrape.boards.metanet.stats import metanet_stats
 from tapascrape.content.fix import FIXES, fix_source, load_context
 from tapascrape.content.smilies import normalize_url
 from tapascrape.db.base import Database
@@ -35,6 +38,7 @@ from tapascrape.parse.bbcode import html_to_bbcode
 from tapascrape.site.build import (EXTENSIONS, BoardLinks, Forum, Poll, PostRef, SiteBuilder, Topic, User,
                                    as_datetime, number, plain)
 from tapascrape.site.render import escape, safe_url
+from tapascrape.tables import as_html
 
 log = logging.getLogger(__name__)
 
@@ -106,7 +110,20 @@ class MetanetSite(SiteBuilder):
 
     def build(self) -> dict[str, int]:
         self.db.create_schema(TABLES)
-        return super().build()
+        built = super().build()
+        self.write_stats()
+        return built
+
+    def shortcuts(self, root: str) -> str:
+        return (f'<nav class="shortcuts"><a href="{root}users.html">Users</a> &middot; '
+                f'<a href="{root}stats.html">Statistics</a></nav>')
+
+    def write_stats(self) -> None:
+        intro = ("<p>What this site shows, and where it comes from: Tapatalk, where the board lives now, or "
+                 "the Wayback Machine's copies of the old board on Forumer. Something both have is counted "
+                 "once, under Both.</p>\n")
+        self.write("stats.html", "", [(None, "Statistics")], intro + as_html(metanet_stats(self.db)),
+                   f"Statistics - {self.board.title}")
 
     # -- loading -------------------------------------------------------------------------------
 

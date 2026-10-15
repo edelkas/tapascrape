@@ -106,3 +106,12 @@ th.flags { cursor: help; }
 table.poll-options { border-collapse: collapse; margin-top: 2px; }
 table.poll-options td { padding: 0 5px 0 0; }
 table.poll-options td.count { text-align: right; padding-left: 10px; }
+
+/* -- statistics -------------------------------------------------------------- */
+
+h2 { font-size: 14px; margin: 14px 0 4px; }
+table.stats { border-collapse: collapse; margin-bottom: 4px; }
+table.stats th, table.stats td { padding: 2px 6px; border: 1px solid var(--border); text-align: left; }
+table.stats thead th { background: var(--panel); }
+table.stats th.count, table.stats td.count { text-align: right; white-space: nowrap; }
+.stats-note { margin: 0 0 6px; color: var(--muted); }

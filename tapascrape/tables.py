@@ -1,5 +1,11 @@
-"""Small tables of numbers, printed as text or written as Markdown."""
+"""Small tables of numbers, printed as text or written as Markdown or HTML.
 
+A row label's leading spaces indent it (two per level): a row breaking down
+the one above.
+"""
+
+import html
+import re
 from dataclasses import dataclass, field
 
 
@@ -56,12 +62,39 @@ def as_markdown(tables: list[Table], title: str | None = None) -> str:
         out += [f"## {table.title}", ""]
         out.append("| " + " | ".join(escape(c) for c in table.columns) + " |")
         out.append("|" + "|".join(" ---: " if right else " --- " for right in numeric(table)) + "|")
-        for row in table.rows:
-            out.append("| " + " | ".join(escape(cell(v)) for v in row) + " |")
+        for label, *values in table.rows:
+            label = "&nbsp;&nbsp;" * level(label) + escape(label.lstrip(" "))
+            out.append("| " + " | ".join([label] + [escape(cell(v)) for v in values]) + " |")
         out.append("")
         if table.note:
             out += [table.note, ""]
     return "\n".join(out)
+
+
+def as_html(tables: list[Table]) -> str:
+    """Each table under an <h2>, with the classes of the site's stylesheet (table.stats)."""
+    out = []
+    for table in tables:
+        right = numeric(table)
+        head = "".join(f'<th class="count">{html.escape(c)}</th>' if r else f"<th>{html.escape(c)}</th>"
+                       for c, r in zip(table.columns, right))
+        rows = []
+        for label, *values in table.rows:
+            cells = ['<span class="indent"></span>' * level(label) + html.escape(label.lstrip(" "))]
+            cells += [html.escape(cell(v)) for v in values]
+            rows.append("<tr>" + "".join(f'<td class="count">{c}</td>' if r else f"<td>{c}</td>"
+                                         for c, r in zip(cells, right)) + "</tr>")
+        out.append(f'<h2>{html.escape(table.title)}</h2>\n<table class="stats"><thead><tr>{head}</tr></thead>'
+                   "<tbody>\n" + "\n".join(rows) + "\n</tbody></table>")
+        if table.note:
+            note = re.sub(r"`([^`]+)`", r"<code>\1</code>", html.escape(table.note, quote=False))
+            out.append(f'<p class="stats-note">{note}</p>')
+    return "\n".join(out)
+
+
+def level(label: str) -> int:
+    """How deep a row label is indented."""
+    return (len(label) - len(label.lstrip(" "))) // 2
 
 
 def escape(text: str) -> str:

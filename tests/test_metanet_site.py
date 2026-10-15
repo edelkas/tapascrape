@@ -127,6 +127,14 @@ def test_metanet_site(tmp_path):
             '<td class="name"><a href="u/9370595.html">bobby_shaftoe</a></td>') in users
     assert '<td class="count"><a href="u/f2-posts.html">4</a></td>' in users
 
+    # the Statistics page, linked next to Users on every page
+    assert ('<nav class="shortcuts"><a href="../users.html">Users</a> &middot; '
+            '<a href="../stats.html">Statistics</a></nav>') in community
+    stats = read("stats.html")
+    assert "<h2>Overview</h2>" in stats and '<table class="stats">' in stats
+    assert '<tr><td>Forums</td><td class="count">4</td>' in stats
+    assert '<span class="indent"></span>' in stats
+
 
 @pytest.mark.parametrize("url, expected", [
     ("http://numa.notdot.net/user/nevermore", "https://www.nmaps.net/user/nevermore"),

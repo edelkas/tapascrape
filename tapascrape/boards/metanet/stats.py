@@ -265,14 +265,18 @@ class Stats:
         self.tables.append(table)
 
     def attachments(self) -> None:
-        rows = self.q("SELECT id, kind, data IS NOT NULL, recovered_from FROM attachments")
+        # Tapatalk's: the ones its posts and signatures use (`metanet attachments` adds the dump's
+        # own, with no uses)
+        everything = self.q("SELECT id, kind, data IS NOT NULL, recovered_from, uses FROM attachments")
+        rows = [row[:4] for row in everything if row[4]]
+        files = {row[0]: row[1:4] for row in everything}
         tapatalk = {row[0] for row in rows}
         boxes = self.q("SELECT old_post_id, ref, kind, attachment_id, data IS NOT NULL FROM forumer_attachments")
         lost_posts = {old_id for old_id, _ in self.lost}
-        forumer = {attachment_id if attachment_id is not None else ("f", old_post_id, ref)
-                   for old_post_id, ref, _, attachment_id, _ in boxes}
-        shown = tapatalk | {("f", old_post_id, ref) for old_post_id, ref, _, attachment_id, _ in boxes
-                            if attachment_id is None and old_post_id in lost_posts}
+        key = {(old_post_id, ref): attachment_id if attachment_id is not None else ("f", old_post_id, ref)
+               for old_post_id, ref, _, attachment_id, _ in boxes}
+        forumer = set(key.values())
+        shown = tapatalk | {key[old_post_id, ref] for old_post_id, ref, *_ in boxes if old_post_id in lost_posts}
         sources_row(self.overview, "Attachments", shown, tapatalk, forumer)
 
         table = Table("Attachments", ["", "Files", "Kept", "From the Wayback Machine", "From the dump", "Lost"],
@@ -286,10 +290,14 @@ class Stats:
             kept = sum(bool(has) for _, _, has, _ in of_kind)
             table.add(label, len(of_kind), kept, wayback, dump, len(of_kind) - kept)
         for kind in ("file", "image"):
-            of_kind = [box for box in boxes if box[2] == kind and box[3] is None and box[0] in lost_posts]
-            kept = sum(bool(box[4]) for box in of_kind)
-            table.add(f"Forumer only: {kind}s of posts Tapatalk lacks", len(of_kind), kept, 0, kept,
-                      len(of_kind) - kept)
+            of_kind = [box for box in boxes if box[2] == kind and box[3] not in tapatalk and box[0] in lost_posts]
+            wayback = dump = 0
+            for _, _, _, attachment_id, has_data in of_kind:
+                _, kept, source = files.get(attachment_id, (None, False, None))
+                wayback += bool(kept) and (source or "").startswith(WAYBACK)
+                dump += bool(has_data) or (bool(kept) and (source or "").startswith(DUMP))
+            table.add(f"Forumer only: {kind}s of posts Tapatalk lacks", len(of_kind), wayback + dump,
+                      wayback, dump, len(of_kind) - wayback - dump)
         self.tables.append(table)
 
     def smileys(self) -> None:
