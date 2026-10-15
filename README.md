@@ -42,6 +42,7 @@ tapascrape enrich metanetfr --db sqlite:///metanet.db
 tapascrape avatars --db sqlite:///metanet.db
 
 tapascrape status   --db sqlite:///metanet.db   # row counts and pending work
+tapascrape stats    --db sqlite:///metanet.db   # what the database has, broken down (--markdown FILE)
 tapascrape finalize --db sqlite:///metanet.db   # recompute aggregate columns
 ```
 
@@ -183,9 +184,10 @@ Author and date alone aren't enough when the quote is long enough to compare and
 | `users.html` | every user, by id: name, rank, join and last-active times, post count, first and last post |
 | `u/<id>.html` | a user: avatar, id, name, rank, groups, join and last-active times, post count, first and last post, signature (empty fields are left out) |
 | `u/<id>-posts.html` | all of a user's posts, oldest first, shown as on topic pages (linked from their post count) |
+| `stats.html` | the tables of `stats`, as of the build |
 | `files/` | the smileys, attachments and avatars stored in the database |
 
-There's one page per forum, topic and user, with no pagination. Every page starts with the board's name (`--title`), a line of shortcuts to the board-wide pages (for now, the users list), and the breadcrumbs down to it.
+There's one page per forum, topic and user, with no pagination. Every page starts with the board's name (`--title`), a line of shortcuts to the board-wide pages (the users list and the statistics), and the breadcrumbs down to it.
 
 - **Forum tables.** A forum's subforums are shown as a tree, nested levels indented. Each level is sorted by latest post: the forum's own, or a subforum's, whichever is newer. Each row shows the forum's own topic, post and view counts and its own last post.
 - **Topic tables.** Topics are sorted by last post, with stickies first. The flags column shows `S` for a sticky, `L` for a locked topic and `P` for a topic with a poll; hovering its header explains them.
@@ -200,6 +202,16 @@ Everything is plain text except post bodies and signatures, which are rendered f
 - **Quotes.** A quote's heading links to the post it quotes, when `quotes` found it.
 
 Rerunning `site` overwrites the pages but doesn't delete anything, so it's safe to rebuild into the same folder.
+
+`tapascrape stats` counts what the database has, so what the site shows, and breaks it down:
+- **Forums:** their tree, with each forum's own topics and posts.
+- **Topics:** how many have every post Tapatalk counts, pinned and locked ones, and how many have 1, 2-10, 11-100... posts.
+- **Posts:** by members and guests, with their BBCode source (rebuilt from the website's HTML, repaired by `fix`) or without it, and the ones Tapatalk failed to serve.
+- **Users:** with posts, by how many, and without; with a signature or an avatar; named only by their id. Plus the groups and their member counts.
+- **By year:** topics started, posts, members posting and members joining.
+- **Files:** polls and their votes; attachments, smileys and embedded images, kept, lost and not looked for yet; quotes, by how they were linked to the post they quote; the files kept in the database and their size.
+
+It prints the tables, or writes them to a Markdown file with `--markdown FILE`. It takes a few seconds and writes nothing. Only counts are given, with no names or profile data, except the names of forums and groups.
 
 ## Metanet: the Forumer era
 
@@ -321,7 +333,7 @@ Images are checked to be images. Outcomes are recorded as `forumer-avatar:<old i
 - **Links to NUMA** (`numa.notdot.net`, now dead) go to its new home, `https://www.nmaps.net`, with the same path, keeping their text. Map pages lose their `/map` (`/map/85674` → `/85674`), and author searches become queries (`browse?sort=created&author=X` → `browse?sort=created&q=author:X`, other parameters kept). Images (`[img]`) are left alone.
 - **Polls** from the dump (`forumer_polls`, filled by `metanet topic-flags`). A poll only Tapatalk or only the dump has is shown as it is. When both have it, the copy with the most votes is shown, normally Tapatalk's, the later snapshot. Topics the dump shows a poll for get the `P` flag, even when the results weren't saved.
 - **Alert and question topics** get the `A` and `Q` flags, from forumer's `!` and `?` icons.
-- **A Statistics page** (`stats.html`), linked from every page's header next to Users: the tables of `metanet stats`, as of the build.
+- **The Statistics page** has the tables of `metanet stats` instead of `stats`.
 
 The profile fields are personal data, as noted above, so mind them before publishing the site.
 

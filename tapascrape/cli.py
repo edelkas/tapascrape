@@ -327,6 +327,23 @@ def cmd_site(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_stats(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from tapascrape.stats import board_stats
+    from tapascrape.tables import as_markdown, as_text
+
+    with open_database(args.db) as db:
+        db.create_schema()
+        tables = board_stats(db)
+    if args.markdown:
+        Path(args.markdown).write_text(as_markdown(tables, "What the database has"), encoding="utf-8")
+        print(f"wrote {args.markdown}")
+    else:
+        print(as_text(tables))
+    return 0
+
+
 def cmd_metanet_import(args: argparse.Namespace) -> int:
     from pathlib import Path
 
@@ -612,6 +629,12 @@ def build_parser() -> argparse.ArgumentParser:
                                       "and rebuild the quotes table; run after fix")
     p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
     p.set_defaults(func=cmd_quotes)
+
+    p = sub.add_parser("stats", help="count what the database has (forums, topics, posts, users, polls, "
+                                     "attachments, smileys, images, quotes...), broken down; writes nothing")
+    p.add_argument("--db", required=True, help="sqlite:///file.db or mysql://user:pass@host/db")
+    p.add_argument("--markdown", metavar="FILE", help="write the tables to FILE as Markdown instead")
+    p.set_defaults(func=cmd_stats)
 
     p = sub.add_parser("site", help="write a static HTML site to browse the board (one page per "
                                     "forum, topic and user); run after fix and quotes")

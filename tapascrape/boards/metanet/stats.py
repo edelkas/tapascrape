@@ -15,12 +15,12 @@ Keys are Tapatalk's ids, or ("f", old id) for what only the dump has. Only
 counts are reported: no names or profile data, but the names of forums.
 """
 
-from collections import Counter, defaultdict
+from collections import Counter
 
 from tapascrape.boards.metanet.schema import TABLES
-from tapascrape.content.images import SCOPE_USES
 from tapascrape.content.smilies import normalize_url
 from tapascrape.db.base import Database
+from tapascrape.stats import embedded_images, quotes
 from tapascrape.tables import Table
 
 SOURCES = ["", "Shown", "Tapatalk", "Forumer", "Tapatalk only", "Forumer only", "Both"]
@@ -316,28 +316,12 @@ class Stats:
         self.tables.append(table)
 
     def images(self) -> None:
-        columns = list(SCOPE_USES.values())
-        rows = self.q(f"SELECT status, uses, {', '.join(columns)} FROM embedded_images")
-        table = Table("Embedded images", ["Embedded in", "Images", "Uses", "Kept from the original host",
-                                          "Kept from the Wayback Machine", "Missing", "Not looked for yet"],
-                      note="Images embedded with [img] from other hosts (see `metanet images`).")
-        groups = defaultdict(list)
-        for status, uses, *counts in rows:
-            where = " and ".join(scope for scope, n in zip(SCOPE_USES, counts) if n) or "nothing any more"
-            groups[where].append((status, uses))
-        for where in sorted(groups):
-            items = groups[where]
-            table.add(where, len(items), sum(uses or 0 for _, uses in items),
-                      sum(s == "live" for s, _ in items), sum(s == "archived" for s, _ in items),
-                      sum(s == "missing" for s, _ in items), sum(s is None for s, _ in items))
-        self.tables.append(table)
+        self.tables.append(embedded_images(self.db, "Images embedded with [img] from other hosts "
+                                                    "(see `metanet images`)."))
 
     def quotes(self) -> None:
-        table = Table("Quotes", ["", "Quotes"], note="Quotes in Tapatalk's posts (see `metanet quotes`).")
-        total, linked = self.q("SELECT COUNT(*), COUNT(quoted_post_id) FROM quotes")[0]
-        table.add("All", total)
-        table.add("  linked to the post they quote", linked)
-        self.tables.append(table)
+        self.tables.append(quotes(self.db, "Quotes in Tapatalk's posts, and the posts they quote (see "
+                                           "`metanet quotes`)."))
 
     def files(self) -> None:
         table = Table("Files kept in the database", ["", "Files", "MB"])

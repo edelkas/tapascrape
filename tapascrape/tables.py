@@ -80,16 +80,20 @@ def as_html(tables: list[Table]) -> str:
                        for c, r in zip(table.columns, right))
         rows = []
         for label, *values in table.rows:
-            cells = ['<span class="indent"></span>' * level(label) + html.escape(label.lstrip(" "))]
+            cells = ['<span class="indent"></span>' * level(label) + code(html.escape(label.lstrip(" ")))]
             cells += [html.escape(cell(v)) for v in values]
             rows.append("<tr>" + "".join(f'<td class="count">{c}</td>' if r else f"<td>{c}</td>"
                                          for c, r in zip(cells, right)) + "</tr>")
         out.append(f'<h2>{html.escape(table.title)}</h2>\n<table class="stats"><thead><tr>{head}</tr></thead>'
                    "<tbody>\n" + "\n".join(rows) + "\n</tbody></table>")
         if table.note:
-            note = re.sub(r"`([^`]+)`", r"<code>\1</code>", html.escape(table.note, quote=False))
-            out.append(f'<p class="stats-note">{note}</p>')
+            out.append(f'<p class="stats-note">{code(html.escape(table.note, quote=False))}</p>')
     return "\n".join(out)
+
+
+def code(text: str) -> str:
+    """`backticks` (in escaped HTML) -> <code>."""
+    return re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
 
 
 def level(label: str) -> int:

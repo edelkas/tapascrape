@@ -4,6 +4,7 @@
     f/<id>.html         a forum: its subforum tree, then its topics
     t/<id>.html         a topic: its poll, then every post, oldest first (anchors #p<post id>)
     users.html          every user (linked from every page's header)
+    stats.html          the tables of `tapascrape stats`, as of the build (linked there too)
     u/<id>.html         a user's profile
     u/<id>-posts.html   all their posts, oldest first
     files/...           smileys, attachments, copies of embedded images and avatars stored in the database
@@ -37,6 +38,8 @@ from tapascrape.db.base import Database
 from tapascrape.net.wayback import image_type
 from tapascrape.parse.bbcode import html_to_bbcode
 from tapascrape.site.render import Linked, Links, Quoted, Renderer, escape
+from tapascrape.stats import board_stats
+from tapascrape.tables import Table, as_html
 
 log = logging.getLogger(__name__)
 
@@ -237,6 +240,7 @@ class SiteBuilder:
             self.write_user(user)
             self.write_user_posts(user)
             progress.advance()
+        self.write_stats()
         return {"forums": len(self.board.forums), "topics": len(self.board.topics),
                 "users": len(self.board.users), "posts": len(self.board.posts)}
 
@@ -510,7 +514,18 @@ class SiteBuilder:
 
     def shortcuts(self, root: str) -> str:
         """The header's links to the board-wide pages."""
-        return f'<nav class="shortcuts"><a href="{root}users.html">Users</a></nav>'
+        return (f'<nav class="shortcuts"><a href="{root}users.html">Users</a> &middot; '
+                f'<a href="{root}stats.html">Statistics</a></nav>')
+
+    def stats_intro(self) -> str:
+        return "<p>What this site shows: the board as archived from Tapatalk, counted.</p>\n"
+
+    def stats_tables(self) -> list[Table]:
+        return board_stats(self.db)
+
+    def write_stats(self) -> None:
+        self.write("stats.html", "", [(None, "Statistics")], self.stats_intro() + as_html(self.stats_tables()),
+                   f"Statistics - {self.board.title}")
 
     def write_forum(self, forum: Forum) -> None:
         root = "../"
